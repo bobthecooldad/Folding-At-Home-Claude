@@ -20,6 +20,7 @@ from .const import (
     CONF_SOLAR_FINISH_ABOVE,
     CONF_SOLAR_MAX_IMPORT_W,
     CONF_SOLAR_MIN_SOC,
+    CONF_SOLAR_PRIORITY,
     CONF_SOLAR_SOC_ENTITY,
     CONF_SOLAR_START_DELAY,
     CONF_SOLAR_START_W,
@@ -30,6 +31,7 @@ from .const import (
     SOLAR_DEFAULTS,
     SOLAR_DISABLED,
     SOLAR_NO_SENSOR,
+    SOLAR_QUEUED,
     SOLAR_RUNNING,
     SOLAR_STARTING,
     SOLAR_STOPPING,
@@ -66,6 +68,7 @@ class SolarSettings:
     max_import_w: float
     stop_action: str
     finish_above: float
+    priority: int = 1
 
     @classmethod
     def from_options(cls, options: dict[str, Any]) -> SolarSettings:
@@ -82,6 +85,7 @@ class SolarSettings:
             max_import_w=float(o[CONF_SOLAR_MAX_IMPORT_W]),
             stop_action=str(o[CONF_SOLAR_STOP_ACTION]),
             finish_above=float(o[CONF_SOLAR_FINISH_ABOVE]),
+            priority=int(o[CONF_SOLAR_PRIORITY]),
         )
 
 
@@ -93,6 +97,7 @@ class SolarLogic:
         self.on = running  # our current decision
         self._pending_since: float | None = None
         self.reason: str = ""
+        self.queued = False
 
     def start_ok(self, r: SolarReadings) -> bool:
         """Conditions to start folding."""
@@ -130,10 +135,22 @@ class SolarLogic:
         delay = self.settings.stop_delay_s if self.on else self.settings.start_delay_s
         return max(0.0, delay - (now - self._pending_since))
 
-    def evaluate(self, r: SolarReadings, now: float) -> str | None:
-        """Return "start" / "stop" when the decision flips, else None."""
+    def evaluate(
+        self, r: SolarReadings, now: float, may_start: bool = True, may_stop: bool = True
+    ) -> str | None:
+        """Return "start" / "stop" when the decision flips, else None.
+
+        ``may_start`` / ``may_stop`` implement priority between machines: a
+        machine waits ("queued") until every higher-priority machine runs,
+        and keeps running until every lower-priority machine has stopped.
+        """
         s = self.settings
+        self.queued = False
         if not self.on:
+            if self.start_ok(r) and not may_start:
+                self._pending_since = None
+                self.queued = True
+                return None
             if self.start_ok(r):
                 if self._pending_since is None:
                     self._pending_since = now
@@ -150,7 +167,7 @@ class SolarLogic:
         if reason:
             if self._pending_since is None:
                 self._pending_since = now
-            if now - self._pending_since >= s.stop_delay_s:
+            if now - self._pending_since >= s.stop_delay_s and may_stop:
                 self.on = False
                 self._pending_since = None
                 self.reason = reason
@@ -163,7 +180,14 @@ class SolarLogic:
         """Controller status for the sensor."""
         if self.on:
             return SOLAR_STOPPING if self.pending else SOLAR_RUNNING
+        if self.queued:
+            return SOLAR_QUEUED
         return SOLAR_STARTING if self.pending else SOLAR_WAITING
+
+    def restart_timer(self, now: float) -> None:
+        """Re-time a pending transition (another machine just changed the load)."""
+        if self._pending_since is not None:
+            self._pending_since = now
 
     def stop_command(self, max_progress: float) -> str:
         """Which client command to send when stopping."""

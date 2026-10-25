@@ -176,6 +176,7 @@ class ProjectTracker:
                     "cause": info.get("cause"),
                     "institution": info.get("institution"),
                     "manager": info.get("manager"),
+                    "description": info.get("description"),
                 }
             )
         return out

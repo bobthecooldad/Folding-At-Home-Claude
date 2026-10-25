@@ -399,3 +399,89 @@ async def test_cpu_slot_disabled_when_no_cpus(hass: HomeAssistant, cloud: MockCl
     rig2.state["units"] = []
     await _login(hass)
     await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig2.id}_slot_|cpu_status")).state == "Disabled")
+
+
+async def test_dashboard_websocket(hass: HomeAssistant, cloud: MockCloud, hass_ws_client) -> None:
+    rig1, rig2 = list(cloud.machines.values())
+    _multi_gpu(rig1)
+    await _login(hass)
+    await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_status")).state == "folding")
+    await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_projects_worked")).state == "2")
+    await hass.async_block_till_done()
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "foldingathome/dashboard"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    acc = msg["result"]["accounts"][0]
+    assert acc["account"]["button_fold_all"].startswith("button.")
+    names = [m["name"] for m in acc["machines"]]
+    assert names == ["rig-1", "rig-2"]
+    m1 = acc["machines"][0]
+    assert m1["entities"]["status"] == _eid(hass, "sensor", f"{rig1.id}_status")
+    assert m1["entities"]["solar_priority"].startswith("number.")
+    assert [g["name"] for g in m1["gpus"]] == ["GPU 1 Quadro RTX 4000", "GPU 2 Quadro P4000", "GPU 3 Quadro P4000"]
+    assert all(g["switch"] and g["sensors"]["status"] for g in m1["gpus"])
+    assert m1["cpus"][0]["cpus"].startswith("number.")
+    assert m1["group_switches"]["default"]["on_idle"].startswith("switch.")
+    # every referenced entity exists
+    ids = [*acc["account"].values()]
+    for m in acc["machines"]:
+        ids += [*m["entities"].values()]
+        for c in m["cpus"]:
+            ids += [*c["sensors"].values(), c["cpus"]]
+        for g in m["gpus"]:
+            ids += [*g["sensors"].values(), g["switch"]]
+    assert all(hass.states.get(i) is not None for i in ids), [i for i in ids if hass.states.get(i) is None]
+    projects = {p["project"]: p for p in acc["projects"]}
+    # current projects first, history merged across machines
+    assert acc["projects"][0]["current_on"]
+    assert set(projects[18251]["machines"]) == {"rig-1", "rig-2"}
+    assert projects[18251]["wus"] == 2
+    assert set(projects[18251]["current_on"]) == {"rig-1", "rig-2"}
+    import pathlib
+    out = pathlib.Path("/tmp/claude-0/card")
+    out.mkdir(parents=True, exist_ok=True)
+    states = {s.entity_id: {"state": s.state, "attributes": dict(s.attributes)} for s in hass.states.async_all() if s.entity_id.split(".")[1].startswith(("rig_", "folding_home"))}
+    (out / "fixture.json").write_text(json.dumps({"layout": msg["result"], "states": states}, default=str))
+
+
+async def test_solar_priority(hass: HomeAssistant, cloud: MockCloud) -> None:
+    """Priority 1 machine starts first; priority 2 only after it; 2 stops first."""
+    rig1, rig2 = list(cloud.machines.values())
+    for m in (rig1, rig2):
+        m.state["groups"][""]["config"]["paused"] = True
+    hass.states.async_set("sensor.surplus", "0", {"unit_of_measurement": "W"})
+    entry = await _login(hass)
+    await _wait(lambda: rig1.sessions and rig2.sessions)
+    await hass.async_block_till_done()
+    coord = entry.runtime_data
+    base = {"solar_enabled": True, "solar_surplus_entity": "sensor.surplus", "solar_start_delay": 0,
+            "solar_stop_delay": 0, "solar_stop_action": "pause", "solar_start_w": 300, "solar_stop_w": -100}
+    # the "extra" machine has the same thresholds but lower priority
+    coord.async_update_machine_options(rig2.id, {**base, "solar_priority": 2})
+    coord.async_update_machine_options(rig1.id, {**base, "solar_priority": 1})
+    await hass.async_block_till_done()
+
+    order = []
+    hass.bus.async_listen("foldingathome_solar_action", lambda e: order.append((e.data["device"], e.data["action"])))
+    hass.states.async_set("sensor.surplus", "800", {"unit_of_measurement": "W"})
+    await _wait(lambda: not rig1.state["groups"][""]["config"]["paused"] and not rig2.state["groups"][""]["config"]["paused"])
+    assert order[:2] == [("rig-1", "start"), ("rig-2", "start")]
+
+    order.clear()
+    hass.states.async_set("sensor.surplus", "-500", {"unit_of_measurement": "W"})
+    await _wait(lambda: rig1.state["groups"][""]["config"]["paused"] and rig2.state["groups"][""]["config"]["paused"])
+    assert order[:2] == [("rig-2", "stop"), ("rig-1", "stop")]
+
+
+def test_priority_queue_logic():
+    from custom_components.foldingathome.solar import SolarLogic, SolarReadings
+    from .test_logic import _settings
+
+    low = SolarLogic(_settings(start_delay_s=0, stop_delay_s=0), running=False)
+    assert low.evaluate(SolarReadings(900), 0, may_start=False) is None
+    assert low.status() == "queued"
+    assert low.evaluate(SolarReadings(900), 1, may_start=True) == "start"
+    assert low.evaluate(SolarReadings(-900), 2, may_stop=False) is None
+    assert low.status() == "stopping"
+    assert low.evaluate(SolarReadings(-900), 3, may_stop=True) == "stop"

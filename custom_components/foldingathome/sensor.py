@@ -364,6 +364,7 @@ class FahAccountSensor(FahAccountEntity, SensorEntity):
     """Account level sensor."""
 
     entity_description: FahAccountSensorDescription
+    _unrecorded_attributes = frozenset({"machines"})
 
     def __init__(self, coordinator: C, description: FahAccountSensorDescription) -> None:
         super().__init__(coordinator, description.key)
@@ -385,6 +386,8 @@ class FahMachineSensor(FahMachineEntity, SensorEntity):
     """Machine level sensor."""
 
     entity_description: FahSensorDescription
+    # Large / fast-changing attributes are kept out of the history database
+    _unrecorded_attributes = frozenset({"units", "projects", "wus_by_cause", "groups"})
 
     def __init__(self, coordinator: C, machine_id: str, description: FahSensorDescription) -> None:
         super().__init__(coordinator, machine_id, description.key)

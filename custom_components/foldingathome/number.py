@@ -18,6 +18,7 @@ from .const import (
     CONF_SOLAR_FINISH_ABOVE,
     CONF_SOLAR_MAX_IMPORT_W,
     CONF_SOLAR_MIN_SOC,
+    CONF_SOLAR_PRIORITY,
     CONF_SOLAR_START_DELAY,
     CONF_SOLAR_START_W,
     CONF_SOLAR_STOP_DELAY,
@@ -37,6 +38,15 @@ class FahSolarNumberDescription(NumberEntityDescription):
 
 
 SOLAR_NUMBERS = (
+    FahSolarNumberDescription(
+        key=CONF_SOLAR_PRIORITY,
+        translation_key="solar_priority",
+        native_min_value=1,
+        native_max_value=10,
+        native_step=1,
+        mode=NumberMode.BOX,
+        icon="mdi:priority-high",
+    ),
     FahSolarNumberDescription(
         key=CONF_SOLAR_START_W,
         translation_key="solar_start_w",

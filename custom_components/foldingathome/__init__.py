@@ -9,11 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 
 from .account import FahAuthError, check_stored_key, valid_node_host
 from .const import CONF_ACCOUNT, CONF_PRIVATE_KEY, DOMAIN
 from .coordinator import FahAccountCoordinator, FahConfigEntry
+from .frontend import async_register_card
 from .services import async_setup_services
+from .websocket import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,8 +34,11 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register services."""
+    """Register services, the dashboard card and its websocket command."""
     async_setup_services(hass)
+    async_register_websocket(hass)
+    integration = await async_get_integration(hass, DOMAIN)
+    await async_register_card(hass, str(integration.version or "0"))
     return True
 
 

@@ -101,6 +101,34 @@ Without a battery, use PV power minus house load, or a forecast sensor minus loa
 
 **Several machines:** stagger the start thresholds (e.g. 300 W, 700 W, 1100 W). Each machine's own draw lowers the surplus once it starts, so keep the gap between start and stop larger than that draw.
 
+## Dashboard card
+
+The integration ships its own dashboard card. There's nothing to install: after a restart, edit a dashboard, choose **Add card**, search for **Folding@home**, and add it (or use YAML):
+
+```yaml
+type: custom:foldingathome-card
+title: Folding@home      # optional
+projects_height: 320     # optional, height of the scrolling projects box (px)
+show_projects: true      # optional
+```
+
+<p align="center"><img src="images/card.png" alt="Dashboard card" width="900"></p>
+
+* **Top bar:** node connection, machines online, total PPD, donor score, and **Fold all / Finish all / Pause all**.
+* **One column per computer** (new computers and GPUs appear by themselves):
+  * **Computer:** status light (🟢 folding, 🟠 finishing, 🔴 stopped, ⚪ offline), PPD, running WUs, client version.
+  * **Master controls:** Fold / Finish / Pause. The current mode is outlined.
+  * **CPU:** status light, progress bar, project, ETA, the CPUs setting, and the idle/battery/keep-awake/beta switches.
+  * **GPUs:** every detected GPU with status light, progress, project, PPD, and its on/off switch.
+  * **Solar:** on/off, live status and surplus, **priority**, what to do when the sun fades, start/stop thresholds and delays.
+* **Projects:** a scrolling list of every project your machines have worked on, current ones first and marked with the machine(s) running them. Each shows its cause, lab, number of WUs, and a summary of the research (click a summary to expand it). Project numbers link to the F@h stats page.
+
+Click any name or status to open its history.
+
+### Solar priority
+
+Give your powerful machines priority **1** and the "extra" machines **2, 3, …**. A machine only starts on solar once every higher-priority machine is already folding, and when the surplus drops, the lowest priority stops first. Machines with the same number work independently. After each start or stop, the other machines re-time their delay, so they switch one at a time and each sees the new surplus.
+
 ## Entities
 
 **Account device**
@@ -122,7 +150,7 @@ Without a battery, use PV power minus house load, or a forecast sensor minus loa
 | Button | Fold, Pause, Finish |
 | Select | Mode (fold/pause/finish), Solar stop action |
 | Switch | Folding (on = fold, off = pause), Solar control, **one switch per GPU** (fold on that GPU, like the web app's *Enabled* box), and per group: Only when idle, While on battery, Keep awake, Beta projects |
-| Number | CPUs (per group), solar thresholds/delays |
+| Number | CPUs (per group), solar priority, solar thresholds/delays |
 
 A machine you unlink from the account is removed from HA at the next account refresh (every 15 min, or press *Refresh*).
 
@@ -170,7 +198,7 @@ automation:
       - action: foldingathome.finish
 ```
 
-See `examples/dashboard.yaml` for a ready-made dashboard, and [SECURITY.md](SECURITY.md) for the security review.
+For a dashboard, use the **Folding@home card** above. See [SECURITY.md](SECURITY.md) for the security review.
 
 ## Troubleshooting
 

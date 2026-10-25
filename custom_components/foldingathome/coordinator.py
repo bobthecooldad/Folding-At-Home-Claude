@@ -695,11 +695,42 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         readings = self._read_solar(machine_id)
         ctx.solar_readings = readings
         before = logic.status()
-        action = logic.evaluate(readings, monotonic())
+        may_start, may_stop = self._solar_priority_gates(machine_id)
+        now = monotonic()
+        action = logic.evaluate(readings, now, may_start=may_start, may_stop=may_stop)
         if action is not None:
             await self._async_solar_act(ctx, action, logic)
+            # The load changed: other machines re-time their pending change so
+            # they start/stop one after another, each seeing the new surplus.
+            for other_id, other in self.contexts.items():
+                if other_id != machine_id and other.solar_logic is not None:
+                    other.solar_logic.restart_timer(now)
+            for other_id in list(self.contexts):
+                if other_id != machine_id:
+                    self.hass.async_create_task(self._async_solar_evaluate(other_id))
         if action is not None or logic.status() != before:
             self.async_update_listeners()
+
+    def _solar_priority_gates(self, machine_id: str) -> tuple[bool, bool]:
+        """(may_start, may_stop) for a machine from the solar priorities.
+
+        Priority 1 is highest. A machine may start only when every
+        higher-priority, solar-controlled, online machine is already running,
+        and may stop only once every lower-priority one has stopped.
+        """
+        me = self.contexts[machine_id].solar_logic
+        if me is None:
+            return True, True
+        may_start = may_stop = True
+        for other_id, other in self.contexts.items():
+            logic = other.solar_logic
+            if other_id == machine_id or logic is None or not other.machine.connected:
+                continue
+            if logic.settings.priority < me.settings.priority and not logic.on:
+                may_start = False
+            if logic.settings.priority > me.settings.priority and logic.on:
+                may_stop = False
+        return may_start, may_stop
 
     async def _async_solar_act(self, ctx: MachineContext, action: str, logic: SolarLogic) -> None:
         mach = ctx.machine
@@ -772,6 +803,7 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
                     "start_w": s.start_w,
                     "stop_w": s.stop_w,
                     "stop_action": s.stop_action,
+                    "priority": s.priority,
                 }
             )
         return attrs

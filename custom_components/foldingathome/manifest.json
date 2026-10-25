@@ -1,15 +1,21 @@
 {
   "domain": "foldingathome",
   "name": "Folding@home",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@bobthecooldad"
   ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "websocket_api"
+  ],
   "documentation": "https://github.com/bobthecooldad/Folding-At-Home-Claude",
   "integration_type": "hub",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/bobthecooldad/Folding-At-Home-Claude/issues",
   "requirements": [],
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

@@ -1,89 +1,11 @@
-# Example dashboard view. Replace "rig_1" with your machine's entity prefix
-# (Settings -> Devices -> your F@h machine shows the entity ids).
-# Duplicate the "Rig 1" cards for each machine.
+# Folding@home dashboard: the integration's own card does everything
+# (one column per computer, controls, CPU, GPUs, solar, projects).
 title: Folding@home
 views:
   - title: Folding
     path: folding
+    type: panel
     cards:
-      - type: entities
-        title: All machines
-        entities:
-          - sensor.folding_home_account_node
-          - sensor.folding_home_account_machines_online
-          - sensor.folding_home_account_total_points_per_day
-          - sensor.folding_home_account_donor_score
-          - sensor.folding_home_account_team_score
-          - button.folding_home_account_fold_all_machines
-          - button.folding_home_account_pause_all_machines
-          - button.folding_home_account_finish_all_machines
-      - type: tile
-        entity: select.rig_1_mode
-        name: Rig 1
-        features:
-          - type: select-options
-        features_position: bottom
-      - type: entities
-        title: Rig 1
-        entities:
-          - select.rig_1_mode
-          - switch.rig_1_solar_control
-          - sensor.rig_1_solar_status
-          - sensor.rig_1_points_per_day
-          - sensor.rig_1_current_project
-          - sensor.rig_1_cpu_progress
-          - sensor.rig_1_cpu_eta
-          - sensor.rig_1_geforce_rtx_4090_progress
-          - sensor.rig_1_geforce_rtx_4090_eta
-      - type: horizontal-stack
-        cards:
-          - type: button
-            entity: button.rig_1_fold
-            name: Fold
-            icon: mdi:play
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target: {entity_id: button.rig_1_fold}
-          - type: button
-            entity: button.rig_1_pause
-            name: Pause
-            icon: mdi:pause
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target: {entity_id: button.rig_1_pause}
-          - type: button
-            entity: button.rig_1_finish
-            name: Finish
-            icon: mdi:flag-checkered
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target: {entity_id: button.rig_1_finish}
-      - type: entities
-        title: Solar thresholds
-        entities:
-          - number.rig_1_solar_start_surplus
-          - number.rig_1_solar_stop_surplus
-          - number.rig_1_solar_start_delay
-          - number.rig_1_solar_stop_delay
-          - select.rig_1_solar_stop_action
-          - number.rig_1_solar_finish_above_progress
-      - type: markdown
-        title: Projects worked
-        content: >
-          **{{ states('sensor.rig_1_projects_worked') }}** projects,
-          **{{ states('sensor.rig_1_work_units_completed') }}** WUs
-
-          | Project | WUs | Cause | Institution | Last |
-          |---|---|---|---|---|
-          {% for p in state_attr('sensor.rig_1_projects_worked', 'projects') or [] -%}
-          | [{{ p.project }}](https://stats.foldingathome.org/project/{{ p.project }}) | {{ p.wus }} | {{ p.cause or '' }} | {{ p.institution or '' }} | {{ (p.last_seen or '')[:10] }} |
-          {% endfor %}
-      - type: history-graph
-        title: PPD & surplus
-        hours_to_show: 48
-        entities:
-          - sensor.folding_home_account_total_points_per_day
-          - sensor.solar_surplus
+      - type: custom:foldingathome-card
+        title: Folding@home
+        projects_height: 360

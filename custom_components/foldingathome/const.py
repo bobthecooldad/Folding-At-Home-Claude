@@ -104,6 +104,7 @@ CONF_SOLAR_IMPORT_ENTITY: Final = "solar_import_entity"
 CONF_SOLAR_MAX_IMPORT_W: Final = "solar_max_import_w"
 CONF_SOLAR_STOP_ACTION: Final = "solar_stop_action"
 CONF_SOLAR_FINISH_ABOVE: Final = "solar_finish_above"
+CONF_SOLAR_PRIORITY: Final = "solar_priority"
 
 STOP_ACTION_PAUSE: Final = "pause"
 STOP_ACTION_FINISH: Final = "finish"
@@ -121,12 +122,14 @@ SOLAR_DEFAULTS: Final = {
     CONF_SOLAR_MAX_IMPORT_W: 0.0,  # 0 = guard disabled
     CONF_SOLAR_STOP_ACTION: STOP_ACTION_SMART,
     CONF_SOLAR_FINISH_ABOVE: 90.0,  # percent
+    CONF_SOLAR_PRIORITY: 1,  # 1 = highest; equal numbers run independently
 }
 
 # Solar controller status values
 SOLAR_DISABLED: Final = "disabled"
 SOLAR_NO_SENSOR: Final = "no_sensor"
 SOLAR_WAITING: Final = "waiting_for_surplus"
+SOLAR_QUEUED: Final = "queued"
 SOLAR_STARTING: Final = "starting"
 SOLAR_RUNNING: Final = "running_on_solar"
 SOLAR_STOPPING: Final = "stopping"
@@ -134,6 +137,7 @@ SOLAR_STATUSES: Final = [
     SOLAR_DISABLED,
     SOLAR_NO_SENSOR,
     SOLAR_WAITING,
+    SOLAR_QUEUED,
     SOLAR_STARTING,
     SOLAR_RUNNING,
     SOLAR_STOPPING,

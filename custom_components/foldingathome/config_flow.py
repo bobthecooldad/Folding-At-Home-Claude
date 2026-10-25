@@ -48,6 +48,7 @@ from .const import (
     CONF_SOLAR_IMPORT_ENTITY,
     CONF_SOLAR_MAX_IMPORT_W,
     CONF_SOLAR_MIN_SOC,
+    CONF_SOLAR_PRIORITY,
     CONF_SOLAR_SOC_ENTITY,
     CONF_SOLAR_START_DELAY,
     CONF_SOLAR_START_W,
@@ -311,6 +312,9 @@ class FahOptionsFlow(OptionsFlow):
             {
                 vol.Required(CONF_SOLAR_ENABLED, default=opts[CONF_SOLAR_ENABLED]): BooleanSelector(),
                 vol.Optional(CONF_SOLAR_SURPLUS_ENTITY, description=sv(CONF_SOLAR_SURPLUS_ENTITY)): sensor_sel,
+                vol.Required(CONF_SOLAR_PRIORITY, default=opts[CONF_SOLAR_PRIORITY]): NumberSelector(
+                    NumberSelectorConfig(min=1, max=10, step=1, mode=NumberSelectorMode.BOX)
+                ),
                 vol.Required(CONF_SOLAR_START_W, default=opts[CONF_SOLAR_START_W]): _watts(),
                 vol.Required(CONF_SOLAR_STOP_W, default=opts[CONF_SOLAR_STOP_W]): _watts(),
                 vol.Required(CONF_SOLAR_START_DELAY, default=opts[CONF_SOLAR_START_DELAY]): _minutes(),

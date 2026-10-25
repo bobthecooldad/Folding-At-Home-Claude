@@ -13,5 +13,8 @@ def test_example_dashboard_uses_card():
 def test_card_file_is_shipped():
     card = ROOT / "custom_components" / "foldingathome" / "frontend" / "foldingathome-card.js"
     src = card.read_text()
-    assert 'customElements.define("foldingathome-card"' in src
-    assert "foldingathome/dashboard" in src
+    for tag in ("foldingathome-card", "foldingathome-research-card",
+                "foldingathome-card-editor", "foldingathome-research-card-editor"):
+        assert f'"{tag}":' in src
+    assert "customElements.define(tag, cls)" in src
+    assert "foldingathome/dashboard" in src and "foldingathome/research" in src

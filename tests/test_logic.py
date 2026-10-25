@@ -158,3 +158,47 @@ def test_node_host_validation():
     assert valid_node_host("127.0.0.1:8080")
     for bad in ("evil.com/x", "user:pw@evil.com", "evil.com?a=b", "localhost", "", None, "a.b:99999999"):
         assert not valid_node_host(bad), bad
+
+
+def test_project_topics():
+    from custom_components.foldingathome.projects import project_topic
+
+    cases = [
+        ("unspecified", "Human Pin1 ... a target for cancer therapeutics.", "cancer"),
+        ("unspecified", "binding of ligands to the CD40L receptor, a target for autoimmune diseases.", "autoimmune"),
+        ("unspecified", "AtWRI1 is a central regulator of lipid biosynthesis in plants.", "plants"),
+        ("unspecified", "variability across a diverse set of enzymes", "enzymes"),
+        ("unspecified", "Nipah virus (NiV) is a highly dangerous pathogen", "viruses"),
+        ("cancer", "PFAS (per and poly-fluoroalkyl substances) are synthetic chemicals", "pfas"),
+        ("cancer", "folding dynamics of several peptide variants", "cancer"),  # cause fallback
+        ("alzheimers", "GLYT1 ... associated with neurological diseases", "alzheimers"),
+        ("influenza", "antibodies undergo affinity maturation", "influenza"),
+        ("unspecified", "antibodies undergo affinity maturation", "immune"),
+        ("unspecified", "Protein misfolding ... diseases such as cancer and Alzheimer's", "misfolding"),
+        ("unspecified", "Ebola virus glycoprotein", "ebola"),
+        ("unspecified", None, "other"),
+        (None, None, "other"),
+    ]
+    for cause, desc, expected in cases:
+        assert project_topic({"cause": cause, "description": desc})[0] == expected, (cause, desc)
+
+
+def test_recent_log_and_backfill():
+    import datetime as dt
+
+    now = dt.datetime.now(dt.UTC)
+    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    t = ProjectTracker()
+    t.ingest(wu_record("new", 1, end=iso(now - dt.timedelta(hours=2))))
+    t.ingest(wu_record("day", 1, end=iso(now - dt.timedelta(hours=30))))
+    t.ingest(wu_record("old", 2, end=iso(now - dt.timedelta(days=60))))  # counted, not logged
+    assert t.wu_count == 3
+    assert set(t.recent) == {"new", "day"}
+    assert [p for _w, p in t.recent_since(now - dt.timedelta(hours=12))] == [1]
+    assert len(t.recent_since(now - dt.timedelta(hours=48))) == 2
+    # a 1.2 tracker (no "recent") fills the log from the client's history
+    old = t.as_dict()
+    old.pop("recent")
+    t2 = ProjectTracker(old)
+    assert t2.ingest(wu_record("new", 1, end=iso(now - dt.timedelta(hours=2)))) is None
+    assert t2.wu_count == 3 and list(t2.recent) == ["new"]

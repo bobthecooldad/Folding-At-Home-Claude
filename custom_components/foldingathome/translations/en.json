@@ -306,6 +306,12 @@
       },
       "team_score": {
         "name": "Team score"
+      },
+      "wus_24h": {
+        "name": "Work units (last 24 h)"
+      },
+      "topic_wus": {
+        "name": "{topic} work units"
       }
     },
     "switch": {

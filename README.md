@@ -8,6 +8,7 @@ A custom integration that controls your **Folding@home v8 machines through your 
 * **Account settings:** user name, team, cause and passkey for the whole account (the same as the web app's Account settings).
 * **Sensors:** status, PPD, running WUs and CPUs in use per machine. Each CPU and GPU slot gets progress, PPD, ETA, project and status. The account gets total PPD, machines online, donor score, WUs, rank and team score.
 * **Project tracking:** every finished WU is recorded per machine and project (count, credited, failed, base credit), with the project's cause, institution and manager. This survives the client's own 500-WU history limit. A `foldingathome_wu_completed` event fires for each WU.
+* **Impact statistics:** work units per research topic (Cancer research, Alzheimer's research, Plants & crops, …) over any time window, as sensors with long-term statistics and on the dashboard.
 * **Solar control per machine:** folds on spare power and finishes or pauses when it runs out. It uses hysteresis and delays, has optional battery and grid-import guards, and staggered thresholds so machines start one after another.
 
 ## How it connects
@@ -103,13 +104,15 @@ Without a battery, use PV power minus house load, or a forecast sensor minus loa
 
 ## Dashboard card
 
-The integration ships its own dashboard card. There's nothing to install: after a restart, edit a dashboard, choose **Add card**, search for **Folding@home**, and add it (or use YAML):
+The integration ships its own dashboard cards. There's nothing to install: after a restart (and a browser refresh), edit a dashboard, choose **Add card**, and search for **Folding@home**. Both cards have a visual editor, so every option below can be set without YAML.
 
 ```yaml
 type: custom:foldingathome-card
 title: Folding@home      # optional
-projects_height: 320     # optional, height of the scrolling projects box (px)
-show_projects: true      # optional
+show_projects: true      # optional, the Impact / Projects box at the bottom
+projects_view: impact    # optional, open the box on "impact" or "details"
+research_hours: 24       # optional, Impact time window (1, 6, 12, 24, 48, 168, 720; 0 = all time)
+projects_height: 400     # optional, height of the scrolling box (px)
 ```
 
 <p align="center"><img src="images/card.png" alt="Dashboard card" width="900"></p>
@@ -121,9 +124,36 @@ show_projects: true      # optional
   * **CPU:** status light, progress bar, project, ETA, the CPUs setting, and the idle/battery/keep-awake/beta switches.
   * **GPUs:** every detected GPU with status light, progress, project, PPD, and its on/off switch.
   * **Solar:** on/off, live status and surplus, **priority**, what to do when the sun fades, start/stop thresholds and delays.
-* **Projects:** a scrolling list of every project your machines have worked on, current ones first and marked with the machine(s) running them. Each shows its cause, lab, number of WUs, and a summary of the research (click a summary to expand it). Project numbers link to the F@h stats page.
+* **Impact / Projects box,** with a toggle at the top right. The card remembers your choice on each device.
+  * **Impact:** how your work is helping. Each research topic shows the work units finished in the time window, one block per WU; outlined green blocks are running right now. Click a topic to see its projects.
+  * **Projects:** every project your machines have worked on, current ones first and marked with the machine(s) running them. Each shows its topic, lab, number of WUs, and a summary of the research (click a summary to expand it). Project numbers link to the F@h stats page.
 
 Click any name or status to open its history.
+
+### Research card
+
+A small card with just the Impact statistics, e.g. for a phone home screen:
+
+```yaml
+type: custom:foldingathome-research-card
+hours: 12            # optional, 0 = all time
+title: My folding    # optional, defaults to your donor name
+show_running: true   # optional, outlined blocks for WUs running now
+max_topics: 0        # optional, 0 = all
+```
+
+<p align="center"><img src="images/research-card.png" alt="Research card" width="520"></p>
+
+### How topics are worked out
+
+Most projects have the F@h cause "unspecified", so the integration reads each project's description:
+
+1. If the description names a specific subject, that wins: protein misfolding, simulation methods/force fields, PFAS, Alzheimer's, Parkinson's, Huntington's, cancer, autoimmune disease, COVID-19, influenza, Ebola, other viruses, bacteria, diabetes.
+2. Otherwise the project's F@h cause is used (e.g. cancer).
+3. Otherwise a broader area: brain & nervous system, plants & crops, antibodies & immune system, disordered proteins, gene regulation, drug design, enzyme dynamics, protein folding & design.
+4. Anything else, or a project whose description isn't published yet, is **Other / not yet identified**.
+
+Finish times are kept for 31 days, so windows up to 30 days are exact. **All time** uses the full project history. After updating from 1.2, the log is filled from each client's own WU history (up to its last 500 WUs) the next time the machine connects.
 
 ### Solar priority
 
@@ -135,7 +165,7 @@ Give your powerful machines priority **1** and the "extra" machines **2, 3, …*
 
 | Type | Entities |
 |---|---|
-| Sensor | Node (connected / disconnected / login expired), Machines online (list in attributes), Total points per day, Donor name, Donor score / work units / rank, Team score |
+| Sensor | Node (connected / disconnected / login expired), Machines online (list in attributes), Total points per day, Donor name, Donor score / work units / rank, Team score, **Work units (last 24 h)** (topic breakdown in attributes), and **one "… work units" sensor per research topic** your machines have worked on (e.g. *Cancer research work units*). These are all-time counts with long-term statistics, so they work in statistics and history graphs. |
 | Binary sensor | Node connected |
 | Button | Fold all machines, Pause all machines, Finish all machines, Refresh |
 | Text / Number / Select | User name, Team, Cause |

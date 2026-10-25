@@ -254,7 +254,24 @@ def _machines_attr(c: C) -> dict[str, Any]:
     }
 
 
+def _research_attr(c: C) -> dict[str, Any]:
+    items = c.topic_stats(24)
+    return {
+        "topics": {t["label"]: t["wus"] for t in items if t["wus"]},
+        "running_now": {t["label"]: t["running"] for t in items if t["running"]},
+    }
+
+
 ACCOUNT_SENSORS: tuple[FahAccountSensorDescription, ...] = (
+    FahAccountSensorDescription(
+        key="wus_24h",
+        translation_key="wus_24h",
+        native_unit_of_measurement="WUs",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:dna",
+        value_fn=lambda c: sum(t["wus"] for t in c.topic_stats(24)),
+        attr_fn=_research_attr,
+    ),
     FahAccountSensorDescription(
         key="node",
         translation_key="node",
@@ -355,9 +372,24 @@ async def async_setup_entry(
         if new:
             async_add_entities(new)
 
+    known_topics: set[str] = set()
+
+    @callback
+    def add_topics() -> None:
+        new = []
+        for item in coordinator.topic_stats():
+            if item["topic"] in known_topics or not (item["wus"] or item["running"]):
+                continue
+            known_topics.add(item["topic"])
+            new.append(FahTopicSensor(coordinator, item["topic"], item["label"]))
+        if new:
+            async_add_entities(new)
+
     coordinator.register_machine_adder(add_machine)
     add_slots()
     coordinator.register_update_adder(add_slots)
+    add_topics()
+    coordinator.register_update_adder(add_topics)
 
 
 class FahAccountSensor(FahAccountEntity, SensorEntity):
@@ -380,6 +412,45 @@ class FahAccountSensor(FahAccountEntity, SensorEntity):
         """Attributes."""
         fn = self.entity_description.attr_fn
         return fn(self.coordinator) if fn else None
+
+
+class FahTopicSensor(FahAccountEntity, SensorEntity):
+    """All-time work units of one research topic (e.g. Cancer research).
+
+    Created the first time the topic turns up, so only topics your machines
+    actually worked on appear. Keeps long-term statistics for graphs.
+    """
+
+    _attr_translation_key = "topic_wus"
+    _attr_native_unit_of_measurement = "WUs"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:dna"
+    _unrecorded_attributes = frozenset({"machines"})
+
+    def __init__(self, coordinator: C, topic: str, label: str) -> None:
+        super().__init__(coordinator, f"topic_{topic.replace('-', '_')}")
+        self.topic = topic
+        self._attr_translation_placeholders = {"topic": label}
+
+    def _item(self) -> dict[str, Any] | None:
+        return next((t for t in self.coordinator.topic_stats() if t["topic"] == self.topic), None)
+
+    @property
+    def native_value(self) -> int:
+        """All-time WUs."""
+        item = self._item()
+        return item["wus"] if item else 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Projects and what is running now."""
+        item = self._item() or {}
+        return {
+            "topic": self.topic,
+            "projects": len(item.get("projects") or []),
+            "running_now": item.get("running", 0),
+            "machines": item.get("machines") or [],
+        }
 
 
 class FahMachineSensor(FahMachineEntity, SensorEntity):

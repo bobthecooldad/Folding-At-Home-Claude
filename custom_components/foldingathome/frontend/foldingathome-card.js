@@ -3,15 +3,22 @@
  *
  *   type: custom:foldingathome-card
  *   title: Folding@home        # optional
- *   projects_height: 320       # optional, px height of the scrolling projects box
- *   show_projects: true        # optional
+ *   projects_height: 400       # optional, px height of the scrolling projects box
+ *   show_projects: true        # optional, show the bottom Impact / Projects box
+ *   projects_view: impact      # optional, opens on "impact" (topic stats) or "details"
+ *   research_hours: 24         # optional, Impact time window in hours (0 = all time)
+ *
+ *   type: custom:foldingathome-research-card   # just the Impact statistics
+ *   hours: 24                  # optional, 0 = all time (finish times are kept 31 days)
+ *   title: ...                 # optional, defaults to your donor name
+ *   show_running: true         # optional, outlined blocks for WUs running now
  *
  * The layout (which entities belong to which machine, GPU, ...) comes from the
  * integration's `foldingathome/dashboard` websocket command, so new machines
  * and GPUs appear by themselves. Live values come from normal HA states.
  */
 
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.3.0";
 
 const COLORS = {
   green: "var(--success-color, #43a047)",
@@ -87,6 +94,68 @@ function fmtDate(value) {
   return isNaN(d) ? "" : d.toLocaleDateString();
 }
 
+const WINDOWS = [
+  [1, "Last hour"], [6, "Last 6 hours"], [12, "Last 12 hours"], [24, "Last 24 hours"],
+  [48, "Last 2 days"], [168, "Last 7 days"], [720, "Last 30 days"], [0, "All time"],
+];
+
+function windowText(hours) {
+  const h = Number(hours) || 0;
+  if (!h) return "All time";
+  const known = WINDOWS.find(([v]) => v === h);
+  if (known) return "Completed in the " + known[1].toLowerCase();
+  return h % 24 === 0 ? `Completed in the last ${h / 24} days` : `Completed in the last ${h} hours`;
+}
+
+const VIEW_KEY = "foldingathome-card-view";
+function loadView() {
+  try { return window.localStorage.getItem(VIEW_KEY); } catch (e) { return null; }
+}
+function saveView(view) {
+  try { window.localStorage.setItem(VIEW_KEY, view); } catch (e) { /* private mode */ }
+}
+
+/* Topic rows: label + count, and one block per work unit. Filled blocks are
+ * finished WUs in the window, outlined blocks are WUs running right now. */
+function renderTopics(research, { showRunning = true, action = "more", maxTopics = 0 } = {}) {
+  let topics = (research.topics || []).filter((t) => t.wus || (showRunning && t.running));
+  if (maxTopics > 0) topics = topics.slice(0, maxTopics);
+  if (!topics.length) {
+    return `<div class="muted small">No work units ${Number(research.hours) ? "finished in this time window yet" : "recorded yet"}.</div>`;
+  }
+  const most = Math.max(...topics.map((t) => t.wus + (showRunning ? t.running : 0)), 1);
+  // Up to 30 blocks per row; bigger numbers group several WUs per block
+  const per = Math.max(1, Math.ceil(most / 30));
+  const rows = topics.map((t) => {
+    const done = Math.ceil(t.wus / per);
+    const running = showRunning ? Math.ceil(t.running / per) : 0;
+    const width = ((t.wus + (showRunning ? t.running : 0)) / most) * 100;
+    const blocks = '<span class="blk"></span>'.repeat(done) + '<span class="blk run"></span>'.repeat(running);
+    const target = action === "more" ? (t.entity || "") : t.topic;
+    const title = `${t.projects.length} project${t.projects.length === 1 ? "" : "s"}${t.machines.length ? " · on " + t.machines.join(", ") : ""}`;
+    return `<div class="topic" data-action="${action === "more" ? (t.entity ? "more" : "") : "topic"}" data-entity="${esc(target)}" data-topic="${esc(t.topic)}" title="${esc(title)}">
+        <div class="row"><span class="tname">${esc(t.label)}</span>
+          ${showRunning && t.running ? `<span class="running">${'<span class="dot" style="background:' + COLORS.green + '"></span>'}${esc(t.running)} running</span>` : ""}
+          <span class="grow"></span><b>${esc(fmtNumber(t.wus))}</b></div>
+        <div class="blocks" style="width:${Math.max(width, 2)}%">${blocks}</div>
+      </div>`;
+  }).join("");
+  const note = per > 1 ? `<div class="muted small">Each block = ${per} work units.</div>` : "";
+  return rows + note;
+}
+
+const RESEARCH_STYLE = `
+  .topic { padding:6px 0; cursor:pointer; }
+  .topic .tname { color:var(--primary-text-color); }
+  .topic b { color:var(--primary-text-color); }
+  .blocks { display:flex; gap:6px; margin-top:6px; min-width:12px; }
+  .blk { flex:1; height:10px; border-radius:5px; background:var(--primary-color); min-width:3px; }
+  .blk.run { background:transparent; box-shadow:inset 0 0 0 2px ${COLORS.green}; }
+  .running { display:inline-flex; align-items:center; gap:4px; font-size:.8em; color:var(--primary-text-color); }
+  .running .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+`;
+
+
 class FoldingAtHomeCard extends HTMLElement {
   constructor() {
     super();
@@ -95,18 +164,35 @@ class FoldingAtHomeCard extends HTMLElement {
     this._error = null;
     this._signature = "";
     this._expanded = new Set();
+    this._research = null;
+    this._view = null;
+    this._topicFilter = null;
     this._onClick = this._onClick.bind(this);
     this._onChange = this._onChange.bind(this);
   }
 
   static getStubConfig() {
-    return { title: "Folding@home" };
+    return { title: "Folding@home", projects_view: "impact", research_hours: 24 };
+  }
+
+  static getConfigElement() {
+    return document.createElement("foldingathome-card-editor");
   }
 
   setConfig(config) {
-    this._config = { title: "Folding@home", projects_height: 320, show_projects: true, ...config };
+    const old = this._config;
+    this._config = {
+      title: "Folding@home", projects_height: 400, show_projects: true,
+      projects_view: "impact", research_hours: 24, ...config,
+    };
+    if (old && (old.projects_view !== this._config.projects_view)) this._view = null;
+    if (old && Number(old.research_hours) !== Number(this._config.research_hours)) this._loadResearch();
     this._signature = "";
     if (this._hass) this._render();
+  }
+
+  get _currentView() {
+    return this._view || loadView() || (this._config.projects_view === "details" ? "details" : "impact");
   }
 
   getCardSize() {
@@ -119,7 +205,10 @@ class FoldingAtHomeCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._layout && !this._loading) this._loadLayout();
+    if (!this._layout && !this._loading) {
+      this._loadLayout();
+      this._loadResearch();
+    }
     this._render();
   }
 
@@ -127,7 +216,10 @@ class FoldingAtHomeCard extends HTMLElement {
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("change", this._onChange);
     // New machines / GPUs and fresh project info show up without a reload
-    this._timer = setInterval(() => this._loadLayout(), 60000);
+    this._timer = setInterval(() => {
+      this._loadLayout();
+      this._loadResearch();
+    }, 60000);
   }
 
   disconnectedCallback() {
@@ -147,6 +239,19 @@ class FoldingAtHomeCard extends HTMLElement {
       this._error = (err && (err.message || err.code)) || String(err);
     }
     this._loading = false;
+    this._signature = "";
+    this._render();
+  }
+
+  async _loadResearch() {
+    if (!this._hass || !this._config || !this._config.show_projects) return;
+    try {
+      const hours = Number(this._config.research_hours) || 0;
+      const result = await this._hass.callWS({ type: "foldingathome/research", hours });
+      this._research = result.accounts || [];
+    } catch (err) {
+      this._research = null; // older integration: Impact view just shows a note
+    }
     this._signature = "";
     this._render();
   }
@@ -188,7 +293,8 @@ class FoldingAtHomeCard extends HTMLElement {
       return `${id}=${s.state}|${a.surplus_w ?? ""}|${a.transition_in_s ?? ""}|${a.max ?? ""}`;
     });
     return JSON.stringify([this._error, this._layout ? this._layout.length : -1, [...this._expanded], parts,
-      (this._layout || []).map((a) => a.projects.length)]);
+      (this._layout || []).map((a) => a.projects.length), this._currentView, this._topicFilter,
+      JSON.stringify(this._research)]);
   }
 
   /* -------------------------------------------------------------- events */
@@ -210,6 +316,18 @@ class FoldingAtHomeCard extends HTMLElement {
       this._render();
     } else if (action === "reload") {
       this._loadLayout();
+    } else if (action === "view") {
+      this._view = el.dataset.view;
+      saveView(this._view);
+      if (this._view === "impact") this._topicFilter = null;
+      this._render();
+    } else if (action === "topic") {
+      this._topicFilter = el.dataset.topic;
+      this._view = "details";
+      this._render();
+    } else if (action === "clearfilter") {
+      this._topicFilter = null;
+      this._render();
     }
   }
 
@@ -246,7 +364,7 @@ class FoldingAtHomeCard extends HTMLElement {
     } else {
       body = this._layout.map((acc) => this._renderAccount(acc)).join("");
     }
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${body}</ha-card>`;
+    this.shadowRoot.innerHTML = `<style>${STYLE}${RESEARCH_STYLE}</style><ha-card>${body}</ha-card>`;
   }
 
   _dot(color, title = "") {
@@ -410,35 +528,60 @@ class FoldingAtHomeCard extends HTMLElement {
   }
 
   _renderProjects(acc) {
-    const items = acc.projects || [];
-    const rows = items.length
-      ? items.map((p) => {
-          const key = `${acc.entry_id}:${p.project}`;
-          const open = this._expanded.has(key);
-          const desc = p.description || "No description available yet.";
-          return `<div class="proj ${p.current_on && p.current_on.length ? "current" : ""}">
-              <div class="row head">
-                <a class="pnum" href="https://stats.foldingathome.org/project/${esc(p.project)}" target="_blank" rel="noopener noreferrer">Project ${esc(p.project)}</a>
-                ${p.cause ? `<span class="cause">${esc(p.cause)}</span>` : ""}
-                ${(p.current_on || []).map((n) => `<span class="running">${this._dot("green")}${esc(n)}</span>`).join("")}
-                <span class="grow"></span>
-                <span class="muted small">${p.wus ? esc(p.wus) + " WU" + (p.wus === 1 ? "" : "s") : ""}${p.last_seen ? " · " + esc(fmtDate(p.last_seen)) : ""}</span>
-              </div>
-              <div class="muted small">${esc([p.institution, p.manager].filter(Boolean).join(" · "))}${p.machines && p.machines.length ? ` · on ${esc(p.machines.join(", "))}` : ""}</div>
-              <div class="desc ${open ? "open" : ""}" data-action="expand" data-key="${esc(key)}" title="Click to ${open ? "collapse" : "expand"}">${esc(desc)}</div>
-            </div>`;
-        }).join("")
-      : `<div class="muted">No projects yet. They appear as work units are assigned and completed.</div>`;
+    const view = this._currentView;
+    const tabs = `<div class="tabs" role="tablist">
+        <button class="tab ${view === "impact" ? "on" : ""}" data-action="view" data-view="impact" role="tab">Impact</button>
+        <button class="tab ${view === "details" ? "on" : ""}" data-action="view" data-view="details" role="tab">Projects</button>
+      </div>`;
+    const height = Number(this._config.projects_height) || 400;
+    let title;
+    let inner;
+    if (view === "impact") {
+      const research = (this._research || []).find((r) => r.entry_id === acc.entry_id);
+      title = research
+        ? `How you're helping <span class="muted small">· ${esc(windowText(research.hours))} · ${esc(fmtNumber(research.total))} work unit${research.total === 1 ? "" : "s"}</span>`
+        : "How you're helping";
+      inner = research
+        ? renderTopics(research, { action: "topic" }) + `<div class="muted small hint">Click a topic to see its projects.</div>`
+        : `<div class="muted small">Loading…</div>`;
+    } else {
+      let items = acc.projects || [];
+      const filter = this._topicFilter;
+      if (filter) items = items.filter((p) => p.topic === filter);
+      const label = filter && items.length ? items[0].topic_label : filter;
+      title = `Projects <span class="muted">(${items.length})</span>${filter ? ` <span class="filter" data-action="clearfilter" title="Show all">${esc(label)} ✕</span>` : ""}`;
+      inner = items.length
+        ? items.map((p) => this._renderProject(acc, p)).join("")
+        : `<div class="muted">No projects yet. They appear as work units are assigned and completed.</div>`;
+    }
     return `<div class="projwrap">
-        <div class="boxtitle">Projects <span class="muted">(${items.length})</span></div>
-        <div class="projects" style="max-height:${Number(this._config.projects_height) || 320}px">${rows}</div>
+        <div class="projhead"><div class="boxtitle">${title}</div><span class="grow"></span>${tabs}</div>
+        <div class="projects" style="max-height:${height}px">${inner}</div>
+      </div>`;
+  }
+
+  _renderProject(acc, p) {
+    const key = `${acc.entry_id}:${p.project}`;
+    const open = this._expanded.has(key);
+    const desc = p.description || "No description available yet.";
+    const topic = p.topic_label || p.cause;
+    return `<div class="proj ${p.current_on && p.current_on.length ? "current" : ""}">
+        <div class="row head">
+          <a class="pnum" href="https://stats.foldingathome.org/project/${esc(p.project)}" target="_blank" rel="noopener noreferrer">Project ${esc(p.project)}</a>
+          ${topic ? `<span class="cause" title="${esc(p.cause ? "F@h cause: " + p.cause : "")}">${esc(topic)}</span>` : ""}
+          ${(p.current_on || []).map((n) => `<span class="running">${this._dot("green")}${esc(n)}</span>`).join("")}
+          <span class="grow"></span>
+          <span class="muted small">${p.wus ? esc(p.wus) + " WU" + (p.wus === 1 ? "" : "s") : ""}${p.last_seen ? " · " + esc(fmtDate(p.last_seen)) : ""}</span>
+        </div>
+        <div class="muted small">${esc([p.institution, p.manager].filter(Boolean).join(" · "))}${p.machines && p.machines.length ? ` · on ${esc(p.machines.join(", "))}` : ""}</div>
+        <div class="desc ${open ? "open" : ""}" data-action="expand" data-key="${esc(key)}" title="Click to ${open ? "collapse" : "expand"}">${esc(desc)}</div>
       </div>`;
   }
 }
 
 const STYLE = `
   :host { display:block; }
-  ha-card { padding:16px; box-sizing:border-box; }
+  ha-card { display:block; padding:16px; box-sizing:border-box; }
   .msg { padding:8px 0; color:var(--secondary-text-color); }
   .header { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin-bottom:12px; }
   .title { font-size:1.4em; font-weight:500; color:var(--primary-text-color); }
@@ -495,7 +638,15 @@ const STYLE = `
   .proj:last-child { border-bottom:none; }
   .proj.current { border-left:3px solid ${COLORS.green}; padding-left:8px; margin-left:-12px; }
   .pnum { font-weight:500; color:var(--primary-color); text-decoration:none; }
-  .cause { font-size:.8em; padding:2px 8px; border-radius:10px; background:var(--secondary-background-color); color:var(--primary-text-color); text-transform:capitalize; }
+  .projhead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+  .projhead .boxtitle { margin-bottom:0; }
+  .tabs { display:inline-flex; border:1px solid var(--divider-color); border-radius:16px; overflow:hidden; }
+  .tab { border:none; background:transparent; color:var(--secondary-text-color); font:inherit; font-size:.9em; padding:4px 12px; cursor:pointer; }
+  .tab.on { background:var(--primary-color); color:var(--text-primary-color, #fff); }
+  .filter { font-size:.8em; padding:2px 8px; border-radius:10px; background:var(--primary-color); color:var(--text-primary-color, #fff); cursor:pointer; margin-left:4px; }
+  .hint { margin:6px 0 4px; }
+  .projects .topic { padding:8px 0; }
+  .cause { font-size:.8em; padding:2px 8px; border-radius:10px; background:var(--secondary-background-color); color:var(--primary-text-color); }
   .running { display:inline-flex; align-items:center; gap:4px; font-size:.8em; color:var(--primary-text-color); }
   .running .dot { width:8px; height:8px; }
   .desc { margin-top:4px; font-size:.9em; color:var(--primary-text-color); cursor:pointer;
@@ -504,17 +655,198 @@ const STYLE = `
   @media (max-width: 600px) { ha-card { padding:12px; } .opts.grid2 { grid-template-columns:1fr; } }
 `;
 
-if (!customElements.get("foldingathome-card")) {
-  customElements.define("foldingathome-card", FoldingAtHomeCard);
+/* ------------------------------------------------- research (impact) card */
+class FoldingAtHomeResearchCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._data = null;
+    this._error = null;
+    this._sig = "";
+    this._onClick = (ev) => {
+      const el = ev.composedPath().find((n) => n.dataset && n.dataset.action === "more");
+      if (el && el.dataset.entity) {
+        this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: el.dataset.entity }, bubbles: true, composed: true }));
+      }
+    };
+  }
+
+  static getStubConfig() {
+    return { hours: 24 };
+  }
+
+  static getConfigElement() {
+    return document.createElement("foldingathome-research-card-editor");
+  }
+
+  setConfig(config) {
+    const old = this._config;
+    this._config = { hours: 24, show_running: true, max_topics: 0, ...config };
+    if (old && Number(old.hours) !== Number(this._config.hours)) this._load();
+    this._sig = "";
+    this._render();
+  }
+
+  getCardSize() {
+    return 2 + Math.min(8, ((this._data && this._data[0] && this._data[0].topics.length) || 3));
+  }
+
+  getGridOptions() {
+    return { columns: 12, min_columns: 4 };
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (first) this._load();
+  }
+
+  connectedCallback() {
+    this.shadowRoot.addEventListener("click", this._onClick);
+    this._timer = setInterval(() => this._load(), 60000);
+    if (this._hass) this._load();
+  }
+
+  disconnectedCallback() {
+    this.shadowRoot.removeEventListener("click", this._onClick);
+    clearInterval(this._timer);
+  }
+
+  async _load() {
+    if (!this._hass || !this._config) return;
+    try {
+      const result = await this._hass.callWS({ type: "foldingathome/research", hours: Number(this._config.hours) || 0 });
+      this._data = result.accounts || [];
+      this._error = null;
+    } catch (err) {
+      this._error = (err && (err.message || err.code)) || String(err);
+    }
+    this._render();
+  }
+
+  _render() {
+    if (!this._config) return;
+    const sig = JSON.stringify([this._config, this._data, this._error]);
+    if (sig === this._sig) return;
+    this._sig = sig;
+    let body;
+    if (this._error) body = `<div class="muted">Could not load Folding@home data: ${esc(this._error)}</div>`;
+    else if (!this._data) body = `<div class="muted">Loading…</div>`;
+    else if (!this._data.length) body = `<div class="muted">No Folding@home account is set up yet.</div>`;
+    else {
+      body = this._data.map((r) => `
+        <div class="title">${esc(this._config.title || r.donor || "Folding@home")}</div>
+        <div class="muted sub">Folding@home · ${esc(windowText(r.hours))} · ${esc(fmtNumber(r.total))} work unit${r.total === 1 ? "" : "s"}</div>
+        ${renderTopics(r, { showRunning: this._config.show_running !== false, maxTopics: Number(this._config.max_topics) || 0 })}`).join('<hr>');
+    }
+    this.shadowRoot.innerHTML = `<style>
+        :host { display:block; }
+        ha-card { display:block; padding:16px; box-sizing:border-box; }
+        .title { font-size:1.2em; font-weight:500; color:var(--primary-text-color); }
+        .sub { margin:6px 0 8px; font-size:.9em; }
+        .muted { color:var(--secondary-text-color); }
+        .small { font-size:.85em; }
+        .row { display:flex; align-items:center; gap:8px; min-width:0; }
+        .grow { flex:1; }
+        hr { border:none; border-top:1px solid var(--divider-color); margin:12px 0; }
+        ${RESEARCH_STYLE}
+      </style><ha-card>${body}</ha-card>`;
+  }
+}
+
+/* ---------------------------------------------------------- card editors */
+const WINDOW_OPTIONS = WINDOWS.map(([value, label]) => ({ value: String(value), label }));
+
+class FahEditorBase extends HTMLElement {
+  setConfig(config) {
+    this._config = config;
+    this._update();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._update();
+  }
+
+  _update() {
+    if (!this._hass || !this._config) return;
+    if (!this._form) {
+      this._form = document.createElement("ha-form");
+      this._form.computeLabel = (schema) => schema.label || schema.name;
+      this._form.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        const config = { ...ev.detail.value };
+        for (const key of this.constructor.numberKeys) {
+          if (config[key] !== undefined && config[key] !== "") config[key] = Number(config[key]);
+        }
+        this._config = config;
+        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+      });
+      this.appendChild(this._form);
+    }
+    const data = { ...this._config };
+    for (const key of this.constructor.numberKeys) {
+      if (data[key] !== undefined && this.constructor.selectKeys.includes(key)) data[key] = String(data[key]);
+    }
+    this._form.hass = this._hass;
+    this._form.schema = this.constructor.schema;
+    this._form.data = data;
+  }
+}
+
+class FahCardEditor extends FahEditorBase {
+  static numberKeys = ["research_hours", "projects_height"];
+  static selectKeys = ["research_hours"];
+  static schema = [
+    { name: "title", label: "Title", selector: { text: {} } },
+    { name: "show_projects", label: "Show the Impact / Projects box", default: true, selector: { boolean: {} } },
+    {
+      name: "projects_view", label: "Open the box on", default: "impact",
+      selector: { select: { mode: "list", options: [
+        { value: "impact", label: "Impact: work units per research topic" },
+        { value: "details", label: "Projects: every project with its summary" },
+      ] } },
+    },
+    { name: "research_hours", label: "Impact time window", default: "24", selector: { select: { mode: "dropdown", options: WINDOW_OPTIONS } } },
+    { name: "projects_height", label: "Box height (px)", default: 400, selector: { number: { min: 120, max: 1200, step: 20, mode: "box" } } },
+  ];
+}
+
+class FahResearchCardEditor extends FahEditorBase {
+  static numberKeys = ["hours", "max_topics"];
+  static selectKeys = ["hours"];
+  static schema = [
+    { name: "title", label: "Title (empty = your donor name)", selector: { text: {} } },
+    { name: "hours", label: "Time window", default: "24", selector: { select: { mode: "dropdown", options: WINDOW_OPTIONS } } },
+    { name: "show_running", label: "Show work units running now", default: true, selector: { boolean: {} } },
+    { name: "max_topics", label: "Max topics (0 = all)", default: 0, selector: { number: { min: 0, max: 30, mode: "box" } } },
+  ];
+}
+
+const ELEMENTS = {
+  "foldingathome-card": FoldingAtHomeCard,
+  "foldingathome-research-card": FoldingAtHomeResearchCard,
+  "foldingathome-card-editor": FahCardEditor,
+  "foldingathome-research-card-editor": FahResearchCardEditor,
+};
+for (const [tag, cls] of Object.entries(ELEMENTS)) {
+  if (!customElements.get(tag)) customElements.define(tag, cls);
 }
 window.customCards = window.customCards || [];
-if (!window.customCards.some((c) => c.type === "foldingathome-card")) {
-  window.customCards.push({
+for (const card of [
+  {
     type: "foldingathome-card",
     name: "Folding@home",
-    description: "All your Folding@home computers: controls, CPU, GPUs, solar and projects.",
-    preview: false,
-    documentationURL: "https://github.com/bobthecooldad/Folding-At-Home-Claude",
-  });
+    description: "All your Folding@home computers: controls, CPU, GPUs, solar, and what your work is helping (Impact or Projects).",
+  },
+  {
+    type: "foldingathome-research-card",
+    name: "Folding@home research",
+    description: "Work units per research topic (Cancer, Alzheimer's, …) over a time window you choose.",
+  },
+]) {
+  if (!window.customCards.some((c) => c.type === card.type)) {
+    window.customCards.push({ ...card, preview: false, documentationURL: "https://github.com/bobthecooldad/Folding-At-Home-Claude" });
+  }
 }
 console.info(`%c FOLDINGATHOME-CARD %c ${CARD_VERSION} `, "background:#1D4277;color:#fff", "background:#2EE6C5;color:#000");

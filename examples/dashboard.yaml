@@ -1,5 +1,5 @@
-# Folding@home dashboard: the integration's own card does everything
-# (one column per computer, controls, CPU, GPUs, solar, projects).
+# Folding@home dashboard: the integration's own cards do everything
+# (one column per computer, controls, CPU, GPUs, solar, impact and projects).
 title: Folding@home
 views:
   - title: Folding
@@ -8,4 +8,11 @@ views:
     cards:
       - type: custom:foldingathome-card
         title: Folding@home
-        projects_height: 360
+        projects_view: impact   # or "details" for the project summaries
+        research_hours: 24
+  # Just the impact statistics, e.g. for a phone view
+  - title: Impact
+    path: folding-impact
+    cards:
+      - type: custom:foldingathome-research-card
+        hours: 12

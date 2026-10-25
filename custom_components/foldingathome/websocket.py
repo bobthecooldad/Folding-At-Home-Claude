@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN, GROUP_BOOL_KEYS
+from .projects import project_topic
 
 MACHINE_KEYS = {
     "sensor": [
@@ -35,7 +36,7 @@ MACHINE_KEYS = {
     ],
 }
 ACCOUNT_KEYS = {
-    "sensor": ["node", "machines_online", "total_ppd", "identity", "score", "rank", "team_score"],
+    "sensor": ["node", "machines_online", "total_ppd", "identity", "score", "rank", "team_score", "wus_24h"],
     "binary_sensor": ["node_connected"],
     "button": ["button_fold_all", "button_pause_all", "button_finish_all", "button_refresh"],
 }
@@ -46,6 +47,7 @@ SLOT_KEYS = ["status", "progress", "ppd", "eta", "project"]
 def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the commands."""
     websocket_api.async_register_command(hass, ws_dashboard)
+    websocket_api.async_register_command(hass, ws_research)
 
 
 def _entities(reg: er.EntityRegistry, prefix: str, keys: dict[str, list[str]]) -> dict[str, str]:
@@ -166,6 +168,8 @@ def build_dashboard(hass: HomeAssistant) -> list[dict[str, Any]]:
                 if name not in proj["current_on"]:
                     proj["current_on"].append(name)
         ordered = list(projects.values())
+        for proj in ordered:
+            proj["topic"], proj["topic_label"] = project_topic(proj)
         # current first, then most recently seen
         current = [p for p in ordered if p["current_on"]]
         rest = sorted(
@@ -192,3 +196,49 @@ def ws_dashboard(
 ) -> None:
     """Return the dashboard layout."""
     connection.send_result(msg["id"], {"accounts": build_dashboard(hass)})
+
+
+def build_research(hass: HomeAssistant, hours: float) -> list[dict[str, Any]]:
+    """Work units per research topic for every loaded account."""
+    reg = er.async_get(hass)
+    accounts = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is not ConfigEntryState.LOADED:
+            continue
+        c = entry.runtime_data
+        topics = [
+            {
+                **item,
+                "entity": reg.async_get_entity_id(
+                    "sensor", DOMAIN, f"{c.account_id}_topic_{item['topic'].replace('-', '_')}"
+                ),
+            }
+            for item in c.topic_stats(hours or None)
+        ]
+        accounts.append(
+            {
+                "entry_id": entry.entry_id,
+                "title": entry.title,
+                "donor": c.account.get("user"),
+                "hours": hours,
+                "total": sum(t["wus"] for t in topics),
+                "running": sum(t["running"] for t in topics),
+                "topics": topics,
+            }
+        )
+    return accounts
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "foldingathome/research",
+        # 0 = all time; the log of finish times covers the last 31 days
+        vol.Optional("hours", default=24): vol.All(vol.Coerce(float), vol.Range(min=0, max=744)),
+    }
+)
+@callback
+def ws_research(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Return work units per research topic."""
+    connection.send_result(msg["id"], {"accounts": build_research(hass, msg["hours"])})

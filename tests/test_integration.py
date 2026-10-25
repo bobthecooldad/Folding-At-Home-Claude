@@ -7,7 +7,7 @@ import json
 
 
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -128,7 +128,7 @@ async def test_machines_appear_and_work(hass: HomeAssistant, cloud: MockCloud) -
 
     # WU completes on rig-2 -> event
     events = []
-    hass.bus.async_listen("foldingathome_wu_completed", lambda e: events.append(e))
+    hass.bus.async_listen("foldingathome_wu_completed", callback(lambda e: events.append(e)))
     await rig2.complete_wu("rig2-new", 99999)
     await _wait(lambda: len(events) == 1)
     assert events[0].data["device"] == "rig-2"
@@ -463,7 +463,10 @@ async def test_solar_priority(hass: HomeAssistant, cloud: MockCloud) -> None:
     await hass.async_block_till_done()
 
     order = []
-    hass.bus.async_listen("foldingathome_solar_action", lambda e: order.append((e.data["device"], e.data["action"])))
+    hass.bus.async_listen(
+        "foldingathome_solar_action",
+        callback(lambda e: order.append((e.data["device"], e.data["action"]))),  # in order, on the loop
+    )
     hass.states.async_set("sensor.surplus", "800", {"unit_of_measurement": "W"})
     await _wait(lambda: not rig1.state["groups"][""]["config"]["paused"] and not rig2.state["groups"][""]["config"]["paused"])
     assert order[:2] == [("rig-1", "start"), ("rig-2", "start")]
@@ -485,3 +488,47 @@ def test_priority_queue_logic():
     assert low.evaluate(SolarReadings(-900), 2, may_stop=False) is None
     assert low.status() == "stopping"
     assert low.evaluate(SolarReadings(-900), 3, may_stop=True) == "stop"
+
+
+async def test_research_topics(hass: HomeAssistant, cloud: MockCloud, hass_ws_client) -> None:
+    """Work units per research topic: websocket, topic sensors, last-24h sensor."""
+    rig1, rig2 = list(cloud.machines.values())
+    entry = await _login(hass)
+    await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_projects_worked")).state == "2")
+    coord = entry.runtime_data
+    # project descriptions arrive -> topics known (mock: 18251 alzheimers, 17000 influenza)
+    await _wait(lambda: {"alzheimers", "influenza"} <= {t["topic"] for t in coord.topic_stats()}, timeout=20)
+    await hass.async_block_till_done()
+    alz = _eid(hass, "sensor", f"{coord.account_id}_topic_alzheimers")
+    assert alz and hass.states.get(alz).state == "2"  # one old WU on each machine
+    assert hass.states.get(alz).attributes["unit_of_measurement"] == "WUs"
+    assert hass.states.get(alz).name.endswith("Alzheimer's research work units")
+    # the old history is outside the last 24 h; a WU finishing now is inside
+    wus24 = _eid(hass, "sensor", f"{coord.account_id}_wus_24h")
+    assert hass.states.get(wus24).state == "0"
+    await rig1.complete_wu("rig1-now", 12345)  # mock: 12345 = cancer
+    await _wait(lambda: hass.states.get(wus24).state == "1")
+    assert hass.states.get(wus24).attributes["topics"] == {"Cancer research": 1}
+    await _wait(lambda: _eid(hass, "sensor", f"{coord.account_id}_topic_cancer") is not None)
+
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "foldingathome/research", "hours": 24})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    acc = msg["result"]["accounts"][0]
+    assert acc["total"] == 1 and acc["hours"] == 24
+    cancer = next(t for t in acc["topics"] if t["topic"] == "cancer")
+    assert cancer["wus"] == 1 and cancer["label"] == "Cancer research"
+    assert cancer["running"] >= 1 and 12345 in cancer["projects"]  # 12345 is also running
+    assert cancer["entity"] == _eid(hass, "sensor", f"{coord.account_id}_topic_cancer")
+    await client.send_json({"id": 2, "type": "foldingathome/research", "hours": 0})
+    msg = await client.receive_json()
+    alltime = {t["topic"]: t["wus"] for t in msg["result"]["accounts"][0]["topics"]}
+    assert alltime["alzheimers"] == 2 and alltime["influenza"] == 2 and alltime["cancer"] == 1
+    await client.send_json({"id": 3, "type": "foldingathome/research", "hours": -5})
+    assert not (await client.receive_json())["success"]
+    # dashboard projects carry their topic
+    await client.send_json({"id": 4, "type": "foldingathome/dashboard"})
+    msg = await client.receive_json()
+    topics = {p["project"]: p["topic_label"] for p in msg["result"]["accounts"][0]["projects"]}
+    assert topics[18251] == "Alzheimer's research"

@@ -1,6 +1,6 @@
 # Security review
 
-Scope: `custom_components/foldingathome` v1.2.0 and `tools/fah_account_check.py`. Reviewed on 2026-10-25 by reading the code, running the bandit scanner, and running the test suite (32 tests, including hostile-input cases).
+Scope: `custom_components/foldingathome` v1.3.0 and `tools/fah_account_check.py`. Reviewed on 2026-10-25 by reading the code, running the bandit scanner, and running the test suite (36 tests, including hostile-input cases).
 
 ## Network exposure
 
@@ -10,7 +10,7 @@ Scope: `custom_components/foldingathome` v1.2.0 and `tools/fah_account_check.py`
 | Outbound | `https://api.foldingathome.org` | Login, account settings, donor stats, project descriptions. TLS certificates are verified (HA's default HTTP session). |
 | Outbound | `wss://<your node>/ws/account` | Account WebSocket to the F@h node. TLS verified. The node host name comes from your account and must be a plain host name; anything with a path, credentials or query is refused. |
 
-The dashboard card is a static JavaScript file served by HA itself, under `/foldingathome/`, to logged-in users. Its data comes over HA's own authenticated WebSocket (`foldingathome/dashboard`, read-only). All text from the network, such as project descriptions and machine names, is HTML-escaped before display.
+The dashboard card is a static JavaScript file served by HA itself, under `/foldingathome/`, to logged-in users. Its data comes over HA's own authenticated WebSocket (`foldingathome/dashboard` and `foldingathome/research`, both read-only; the time window is range-checked). All text from the network, such as project descriptions and machine names, is HTML-escaped before display.
 
 Nothing on your LAN is contacted. The machines also only make outbound connections to the node, so the F@h clients no longer need to listen on the network.
 

@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 import datetime as dt
 import logging
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -55,7 +56,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .model import MachineView, build_machine
-from .projects import ProjectTracker
+from .projects import TOPIC_OTHER, ProjectTracker, project_topic
 from .solar import (
     SolarLogic,
     SolarReadings,
@@ -131,6 +132,8 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         self._info_task: asyncio.Task | None = None
         self._machine_adders: list[Callable[[str], None]] = []
         self._update_adders: list[Callable[[], None]] = []
+        self._solar_lock = asyncio.Lock()
+        self._topic_cache: dict[float, tuple[float, list[dict[str, Any]]]] = {}
         self.data = {}
 
     # ---------------------------------------------------------------- setup
@@ -210,6 +213,7 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         return self._build_all()
 
     def _build_all(self) -> dict[str, MachineView]:
+        self._topic_cache.clear()
         out: dict[str, MachineView] = {}
         for mid, ctx in self.contexts.items():
             if ctx.machine.connected and ctx.machine.state:
@@ -242,6 +246,68 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
             info = ctx.machine.state.get("info", {})
             return info.get("mach_name") or info.get("hostname") or machine_id[:8]
         return machine_id[:8]
+
+    # ------------------------------------------------------------- topics
+    def project_info_all(self) -> dict[str, dict[str, Any]]:
+        """Project descriptions known on any machine."""
+        merged: dict[str, dict[str, Any]] = {}
+        for ctx in self.contexts.values():
+            merged.update(ctx.tracker.project_info)
+        return merged
+
+    def topic_stats(self, hours: float | None = None) -> list[dict[str, Any]]:
+        """Work units per research topic, all time or for the last ``hours``.
+
+        Cached for a few seconds, because several entities and the card ask
+        for the same numbers on each update.
+        """
+        cache_key = float(hours or 0)
+        now = time.monotonic()
+        cached = self._topic_cache.get(cache_key)
+        if cached and now - cached[0] < 5:
+            return cached[1]
+        info = self.project_info_all()
+        topics: dict[str, dict[str, Any]] = {}
+
+        def bucket(project: Any) -> dict[str, Any]:
+            key, label = project_topic(info.get(str(project)))
+            return topics.setdefault(
+                key,
+                {"topic": key, "label": label, "wus": 0, "running": 0, "projects": set(), "machines": set()},
+            )
+
+        since = dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours) if hours else None
+        for mid, ctx in self.contexts.items():
+            name = self.machine_name(mid)
+            if since is not None:
+                for _when, project in ctx.tracker.recent_since(since):
+                    b = bucket(project)
+                    b["wus"] += 1
+                    b["projects"].add(int(project))
+                    b["machines"].add(name)
+            else:
+                for key, proj in ctx.tracker.projects.items():
+                    b = bucket(key)
+                    b["wus"] += proj.get("wus") or 0
+                    b["projects"].add(int(key))
+                    b["machines"].add(name)
+            view = (self.data or {}).get(mid)
+            for unit in view.running_units if view else []:
+                if unit.project is None:
+                    continue
+                b = bucket(unit.project)
+                b["running"] += 1
+                b["projects"].add(int(unit.project))
+                b["machines"].add(name)
+        result = sorted(
+            (
+                {**b, "projects": sorted(b["projects"]), "machines": sorted(b["machines"])}
+                for b in topics.values()
+            ),
+            key=lambda b: (b["topic"] == TOPIC_OTHER[0], -b["wus"], -b["running"], b["label"]),
+        )
+        self._topic_cache[cache_key] = (now, result)
+        return result
 
     def register_machine_adder(self, adder: Callable[[str], None]) -> None:
         """Platforms add entities for each (new) machine."""
@@ -504,9 +570,12 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
     @callback
     def _ingest_wus(self, machine_id: str, wus: list[Any], incremental: bool) -> None:
         ctx = self._context(machine_id)
+        recent_before = len(ctx.tracker.recent)
         new = [s for wu in wus if (s := ctx.tracker.ingest(wu))]
         if not new:
             ctx.history_imported = True
+            if len(ctx.tracker.recent) != recent_before:
+                self._save_later()  # recent log filled from the client's history
             return
         if incremental or ctx.history_imported:
             for summary in sorted(new, key=lambda s: s.get("end_time") or ""):
@@ -554,21 +623,31 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         shared: dict[str, Any] = {}
         for ctx in self.contexts.values():
             shared.update(ctx.tracker.project_info)
-        for project in self._missing_project_info()[:50]:
-            if not str(project).isdigit():
-                continue  # project ids come from the machines: only digits go in a URL
-            try:
-                info = await self.api.get_json(f"/project/{project}")
-            except FahApiError:
-                info = {}
-            except FahConnectionError as err:
-                _LOGGER.debug("Project %s info failed: %s", project, err)
+        # Loop: projects that turn up while we fetch are picked up too
+        attempted: set[str] = set()
+        while todo := [p for p in self._missing_project_info() if p not in attempted][:50]:
+            if len(attempted) >= 200:
                 break
-            if isinstance(info, dict) and not info.get("error"):
-                for ctx in self.contexts.values():
-                    ctx.tracker.set_project_info(project, info)
-                shared[project] = info
-            await asyncio.sleep(0.5)
+            offline = False
+            for project in todo:
+                attempted.add(project)
+                if not str(project).isdigit():
+                    continue  # project ids come from the machines: only digits go in a URL
+                try:
+                    info = await self.api.get_json(f"/project/{project}")
+                except FahApiError:
+                    info = {}
+                except FahConnectionError as err:
+                    _LOGGER.debug("Project %s info failed: %s", project, err)
+                    offline = True
+                    break
+                if isinstance(info, dict) and not info.get("error"):
+                    for ctx in self.contexts.values():
+                        ctx.tracker.set_project_info(project, info)
+                    shared[project] = info
+                await asyncio.sleep(0.5)
+            if offline:
+                break
         # Share info between machines (same project on several machines)
         for ctx in self.contexts.values():
             for key, info in shared.items():
@@ -688,6 +767,13 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         )
 
     async def _async_solar_evaluate(self, machine_id: str) -> None:
+        # One decision at a time across machines: otherwise a lower-priority
+        # machine could start while a higher-priority one's command is still
+        # on its way, and both would switch at once.
+        async with self._solar_lock:
+            await self._async_solar_evaluate_locked(machine_id)
+
+    async def _async_solar_evaluate_locked(self, machine_id: str) -> None:
         ctx = self.contexts.get(machine_id)
         if ctx is None or ctx.solar_logic is None:
             return

@@ -1,10 +1,6 @@
 {
   "domain": "foldingathome",
   "name": "Folding@home",
-  "categories": [
-    "computers_network.monitoring",
-    "energy.solar_batteries"
-  ],
   "codeowners": [
     "@bobthecooldad"
   ],

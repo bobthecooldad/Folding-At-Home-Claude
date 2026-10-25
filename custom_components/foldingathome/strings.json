@@ -1,0 +1,437 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Log in to Folding@home",
+        "description": "Use the email and **passphrase** of your Folding@home account (the login for app.foldingathome.org, not the donor passkey). Every machine linked to the account is added automatically. The passphrase is only used to unlock the account key and is not stored.",
+        "data": {
+          "email": "Email",
+          "passphrase": "Passphrase"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Log in again",
+        "description": "The Folding@home session for {email} has expired or the account key changed. Enter the passphrase again.",
+        "data": {
+          "passphrase": "Passphrase"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach api.foldingathome.org.",
+      "invalid_auth": "Wrong email or passphrase.",
+      "no_secret": "This account has no stored key yet. Log in once at app.foldingathome.org, then try again.",
+      "no_node": "The account has no node configured. Open app.foldingathome.org → Account settings and save once.",
+      "unknown": "Unexpected error",
+      "invalid_user": "User names cannot contain spaces (max 100 characters).",
+      "invalid_passkey": "A passkey is exactly 32 hexadecimal characters (0-9, a-f).",
+      "cannot_save": "Could not save the account settings (see the log).",
+      "surplus_required": "Choose a surplus sensor to enable solar control.",
+      "stop_above_start": "The stop threshold must be lower than the start threshold."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Logged in again.",
+      "wrong_account": "That login belongs to a different Folding@home account."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Folding@home options",
+        "menu_options": {
+          "identity": "User, team and passkey (whole account)",
+          "solar_machine": "Solar control (per machine)"
+        }
+      },
+      "identity": {
+        "title": "Donor identity",
+        "description": "These settings apply to every machine linked to the account. Passkey is currently {passkey_state}.",
+        "data": {
+          "user": "User name",
+          "team": "Team number",
+          "passkey": "Passkey",
+          "clear_passkey": "Remove the passkey",
+          "cause": "Preferred cause"
+        },
+        "data_description": {
+          "passkey": "32 hexadecimal characters. Leave empty to keep the current one. Never shown again and never written to the history database."
+        }
+      },
+      "solar_machine": {
+        "title": "Solar control",
+        "description": "Choose the machine to configure.",
+        "data": {
+          "machine": "Machine"
+        }
+      },
+      "solar": {
+        "title": "Solar control",
+        "description": "Machine: **{machine}**\n\nFold on spare solar power and stop when it runs out. A manual Fold or Pause is kept until the next solar change.",
+        "data": {
+          "solar_enabled": "Enable solar control",
+          "solar_surplus_entity": "Surplus power sensor (W or kW, positive = spare power)",
+          "solar_start_w": "Start folding when surplus is at least",
+          "solar_stop_w": "Stop when surplus drops below",
+          "solar_start_delay": "Surplus must last this long before starting",
+          "solar_stop_delay": "Shortfall must last this long before stopping",
+          "solar_stop_action": "When solar runs out",
+          "solar_finish_above": "Smart stop: finish if work unit progress is at least",
+          "solar_soc_entity": "Battery state-of-charge sensor (optional)",
+          "solar_min_soc": "Only start when battery is at least",
+          "solar_stop_soc": "Stop when battery drops below",
+          "solar_import_entity": "Grid import power sensor (optional)",
+          "solar_max_import_w": "Stop when grid import exceeds (0 = off)"
+        },
+        "data_description": {
+          "solar_surplus_entity": "With a zero-export limit the inverter curtails spare power, so use a template sensor such as PV power minus house load (house load must include this machine). Negative values mean you are using more than the panels make.",
+          "solar_stop_w": "Must be lower than the start threshold. The machine's own draw lowers the surplus once it starts, so leave a gap at least as big as its power draw.",
+          "solar_start_w": "With several machines, stagger the start thresholds (e.g. 300 W, 600 W, 900 W) so they start one after another."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach api.foldingathome.org.",
+      "invalid_auth": "Wrong email or passphrase.",
+      "no_secret": "This account has no stored key yet. Log in once at app.foldingathome.org, then try again.",
+      "no_node": "The account has no node configured. Open app.foldingathome.org → Account settings and save once.",
+      "unknown": "Unexpected error",
+      "invalid_user": "User names cannot contain spaces (max 100 characters).",
+      "invalid_passkey": "A passkey is exactly 32 hexadecimal characters (0-9, a-f).",
+      "cannot_save": "Could not save the account settings (see the log).",
+      "surplus_required": "Choose a surplus sensor to enable solar control.",
+      "stop_above_start": "The stop threshold must be lower than the start threshold."
+    },
+    "abort": {
+      "no_machines": "No machines are linked to this account yet."
+    }
+  },
+  "selector": {
+    "cause": {
+      "options": {
+        "any": "Any",
+        "alzheimers": "Alzheimer's",
+        "cancer": "Cancer",
+        "huntingtons": "Huntington's",
+        "parkinsons": "Parkinson's",
+        "influenza": "Influenza",
+        "diabetes": "Diabetes",
+        "covid-19": "COVID-19"
+      }
+    },
+    "solar_stop_action": {
+      "options": {
+        "pause": "Pause immediately",
+        "finish": "Finish the current work unit",
+        "smart": "Finish if progress is above the threshold, otherwise pause"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "node_connected": {
+        "name": "Node connected"
+      },
+      "online": {
+        "name": "Online"
+      },
+      "folding": {
+        "name": "Computing"
+      }
+    },
+    "button": {
+      "fold": {
+        "name": "Fold"
+      },
+      "pause": {
+        "name": "Pause"
+      },
+      "finish": {
+        "name": "Finish"
+      },
+      "fold_all": {
+        "name": "Fold all machines"
+      },
+      "pause_all": {
+        "name": "Pause all machines"
+      },
+      "finish_all": {
+        "name": "Finish all machines"
+      },
+      "refresh": {
+        "name": "Refresh"
+      }
+    },
+    "number": {
+      "team": {
+        "name": "Team"
+      },
+      "solar_start_w": {
+        "name": "Solar start surplus"
+      },
+      "solar_stop_w": {
+        "name": "Solar stop surplus"
+      },
+      "solar_start_delay": {
+        "name": "Solar start delay"
+      },
+      "solar_stop_delay": {
+        "name": "Solar stop delay"
+      },
+      "solar_finish_above": {
+        "name": "Solar finish above progress"
+      },
+      "solar_min_soc": {
+        "name": "Solar minimum battery"
+      },
+      "solar_stop_soc": {
+        "name": "Solar stop battery"
+      },
+      "solar_max_import_w": {
+        "name": "Solar max grid import"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "fold": "Fold",
+          "pause": "Pause",
+          "finish": "Finish"
+        }
+      },
+      "cause": {
+        "name": "Cause",
+        "state": {
+          "any": "Any",
+          "alzheimers": "Alzheimer's",
+          "cancer": "Cancer",
+          "huntingtons": "Huntington's",
+          "parkinsons": "Parkinson's",
+          "influenza": "Influenza",
+          "diabetes": "Diabetes",
+          "covid-19": "COVID-19"
+        }
+      },
+      "solar_stop_action": {
+        "name": "Solar stop action",
+        "state": {
+          "pause": "Pause",
+          "finish": "Finish",
+          "smart": "Smart"
+        }
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "folding": "Folding",
+          "finishing": "Finishing",
+          "paused": "Paused",
+          "waiting": "Waiting",
+          "idle": "Idle",
+          "offline": "Offline"
+        }
+      },
+      "ppd": {
+        "name": "Points per day"
+      },
+      "running_units": {
+        "name": "Running work units"
+      },
+      "cpus_used": {
+        "name": "CPUs in use"
+      },
+      "current_project": {
+        "name": "Current project"
+      },
+      "projects_worked": {
+        "name": "Projects worked"
+      },
+      "wus_completed": {
+        "name": "Work units completed"
+      },
+      "base_credit": {
+        "name": "Base credit earned"
+      },
+      "last_wu": {
+        "name": "Last work unit finished"
+      },
+      "solar_status": {
+        "name": "Solar status",
+        "state": {
+          "disabled": "Disabled",
+          "no_sensor": "No surplus sensor",
+          "waiting_for_surplus": "Waiting for surplus",
+          "starting": "Starting",
+          "running_on_solar": "Running on solar",
+          "stopping": "Stopping"
+        }
+      },
+      "version": {
+        "name": "Client version"
+      },
+      "node": {
+        "name": "Node",
+        "state": {
+          "connected": "Connected",
+          "disconnected": "Disconnected",
+          "login_expired": "Login expired"
+        }
+      },
+      "machines_online": {
+        "name": "Machines online"
+      },
+      "total_ppd": {
+        "name": "Total points per day"
+      },
+      "identity": {
+        "name": "Donor name"
+      },
+      "score": {
+        "name": "Donor score"
+      },
+      "stats_wus": {
+        "name": "Donor work units"
+      },
+      "rank": {
+        "name": "Donor rank"
+      },
+      "team_score": {
+        "name": "Team score"
+      }
+    },
+    "switch": {
+      "folding": {
+        "name": "Folding"
+      },
+      "solar_control": {
+        "name": "Solar control"
+      }
+    },
+    "text": {
+      "user": {
+        "name": "User name"
+      }
+    }
+  },
+  "services": {
+    "fold": {
+      "name": "Fold",
+      "description": "Start or resume folding.",
+      "fields": {
+        "device_id": {
+          "name": "Machines",
+          "description": "Machines (or the account device for all of its machines). Leave empty for all online machines."
+        },
+        "group": {
+          "name": "Resource group",
+          "description": "Only this group (empty = whole machine)."
+        }
+      }
+    },
+    "pause": {
+      "name": "Pause",
+      "description": "Pause folding.",
+      "fields": {
+        "device_id": {
+          "name": "Machines",
+          "description": "Machines (or the account device for all of its machines). Leave empty for all online machines."
+        },
+        "group": {
+          "name": "Resource group",
+          "description": "Only this group (empty = whole machine)."
+        }
+      }
+    },
+    "finish": {
+      "name": "Finish",
+      "description": "Finish the current work units, then stop.",
+      "fields": {
+        "device_id": {
+          "name": "Machines",
+          "description": "Machines (or the account device for all of its machines). Leave empty for all online machines."
+        },
+        "group": {
+          "name": "Resource group",
+          "description": "Only this group (empty = whole machine)."
+        }
+      }
+    },
+    "set_identity": {
+      "name": "Set identity",
+      "description": "Set the account's user name, team and cause (applies to all linked machines). Set the passkey from the integration's Configure dialog.",
+      "fields": {
+        "device_id": {
+          "name": "Machines",
+          "description": "Leave empty for all."
+        },
+        "user": {
+          "name": "User name",
+          "description": "Donor name."
+        },
+        "team": {
+          "name": "Team",
+          "description": "Team number."
+        },
+        "cause": {
+          "name": "Cause",
+          "description": "Preferred cause."
+        }
+      }
+    },
+    "set_group_config": {
+      "name": "Set group options",
+      "description": "Change resource group options.",
+      "fields": {
+        "device_id": {
+          "name": "Machines",
+          "description": "Leave empty for all."
+        },
+        "group": {
+          "name": "Group",
+          "description": "Group name (empty = default group)."
+        },
+        "cpus": {
+          "name": "CPUs",
+          "description": "CPUs to use."
+        },
+        "on_idle": {
+          "name": "Only when idle",
+          "description": "Fold only when idle."
+        },
+        "on_battery": {
+          "name": "While on battery",
+          "description": "Fold on battery."
+        },
+        "keep_awake": {
+          "name": "Keep awake",
+          "description": "Prevent sleep while folding."
+        },
+        "beta": {
+          "name": "Beta",
+          "description": "Accept beta projects."
+        },
+        "cuda": {
+          "name": "CUDA",
+          "description": "Use CUDA."
+        },
+        "hip": {
+          "name": "HIP",
+          "description": "Use HIP."
+        }
+      }
+    },
+    "refresh_account": {
+      "name": "Refresh account",
+      "description": "Re-read the account (machines, names, settings) and donor stats now.",
+      "fields": {
+        "device_id": {
+          "name": "Devices",
+          "description": "Leave empty for all accounts."
+        }
+      }
+    }
+  }
+}

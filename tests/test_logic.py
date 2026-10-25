@@ -1,0 +1,160 @@
+"""Pure-python tests: patches, model, projects, solar, validation, discovery."""
+
+
+from custom_components.foldingathome.account import apply_update, redact
+from custom_components.foldingathome.model import build_machine, parse_eta
+from custom_components.foldingathome.projects import ProjectTracker
+from custom_components.foldingathome.solar import SolarLogic, SolarReadings, SolarSettings
+from custom_components.foldingathome.validation import is_valid_passkey, is_valid_user
+
+from .fah_mock import make_state, wu_record
+
+
+def test_apply_update():
+    s = {"units": [{"id": 1}], "config": {"user": "a"}}
+    apply_update(s, ["config", "user", "b"])
+    apply_update(s, ["units", 0, "wu_progress", 0.5])
+    apply_update(s, ["units", -1, {"id": 2}])
+    apply_update(s, ["wus", [1]])
+    apply_update(s, ["wus", -2, [2, 3]])
+    apply_update(s, ["units", 0, None])
+    apply_update(s, ["groups", "x", "config", {"paused": True}])
+    assert s["config"]["user"] == "b"
+    assert s["units"] == [{"id": 2}]
+    assert s["wus"] == [1, 2, 3]
+    assert s["groups"]["x"]["config"]["paused"] is True
+
+
+def test_redact():
+    assert redact({"config": {"passkey": "abc", "user": "u"}, "secret": "s"}) == {
+        "config": {"passkey": "**REDACTED**", "user": "u"},
+        "secret": "**REDACTED**",
+    }
+
+
+def test_parse_eta():
+    assert parse_eta("1h 20m") == 4800
+    assert parse_eta("2 hours 3 mins") == 7380
+    assert parse_eta("45s") == 45
+    assert parse_eta("1d 2h") == 93600
+    assert parse_eta("") is None
+
+
+def test_machine_view():
+    st = make_state()
+    m = build_machine(st)
+    assert m.status == "folding"
+    assert m.ppd == 9250000
+    assert m.projects == [18251, 12345]
+    assert m.cpus_used == 31
+    slots = {u.slot: u for u in m.units}
+    assert set(slots) == {"|cpu", "|gpu:gpu:01:00:00"}
+    assert slots["|gpu:gpu:01:00:00"].slot_name == "GeForce RTX 4090"
+    assert round(m.max_progress) == 95
+    st["groups"][""]["config"]["finish"] = True
+    assert build_machine(st).status == "finishing"
+    assert build_machine(st).units[0].status == "Finishing"
+    st["groups"][""]["config"]["paused"] = True
+    assert build_machine(st).status == "paused"
+    st["groups"][""]["config"]["paused"] = False
+    st["groups"][""]["config"]["finish"] = False
+    st["units"] = []
+    assert build_machine(st).status == "idle"
+    # waiting for idle
+    st = make_state()
+    for u in st["units"]:
+        u["pause_reason"] = "Waiting for idle system"
+    m = build_machine(st)
+    assert m.status == "waiting"
+    assert m.units[0].status == "Waiting for idle system"
+
+
+def test_project_tracker():
+    t = ProjectTracker()
+    assert t.ingest(wu_record("a", 1)) is not None
+    assert t.ingest(wu_record("a", 1)) is None  # duplicate
+    t.ingest(wu_record("b", 1, end="2026-10-21T00:00:00Z"))
+    t.ingest(wu_record("c", 2, "failed"))
+    t.ingest({"id": "d", "state": "RUN", "assignment": {"project": 3}})  # unfinished
+    assert t.project_count == 2
+    assert t.wu_count == 3
+    assert t.credited_count == 2
+    assert t.base_credit_total == 2000
+    assert t.last_wu["unit_id"] == "b"
+    t.set_project_info(1, {"cause": "cancer", "description": "<p>Hello&nbsp;<b>world</b></p>"})
+    assert t.project_info["1"]["description"] == "Hello world"
+    assert t.by_cause() == {"cancer": 2, "unknown": 1}
+    t2 = ProjectTracker(t.as_dict())
+    assert t2.ingest(wu_record("a", 1)) is None
+    assert t2.wu_count == 3
+
+
+def _settings(**kw):
+    base = dict(
+        start_w=300, stop_w=-100, start_delay_s=60, stop_delay_s=60, use_soc=False,
+        min_soc=0, stop_soc=0, max_import_w=0, stop_action="smart", finish_above=90,
+    )
+    base.update(kw)
+    return SolarSettings(**base)
+
+
+def test_solar_hysteresis():
+    logic = SolarLogic(_settings(), running=False)
+    assert logic.evaluate(SolarReadings(500), 0) is None
+    assert logic.status() == "starting"
+    assert logic.evaluate(SolarReadings(200), 30) is None  # dip resets timer
+    assert logic.status() == "waiting_for_surplus"
+    assert logic.evaluate(SolarReadings(500), 40) is None
+    assert logic.evaluate(SolarReadings(500), 100) == "start"
+    assert logic.status() == "running_on_solar"
+    # running: surplus drops (machine load) but above stop threshold -> keep going
+    assert logic.evaluate(SolarReadings(0), 200) is None
+    assert logic.evaluate(SolarReadings(-200), 300) is None
+    assert logic.status() == "stopping"
+    assert logic.evaluate(SolarReadings(-200), 361) == "stop"
+    assert logic.stop_command(95) == "finish"
+    assert logic.stop_command(40) == "pause"
+    # sensor unavailable while running -> stop after delay
+    logic = SolarLogic(_settings(stop_delay_s=0), running=True)
+    assert logic.evaluate(SolarReadings(None), 0) == "stop"
+
+
+def test_solar_guards():
+    logic = SolarLogic(_settings(use_soc=True, min_soc=80, stop_soc=50, start_delay_s=0, stop_delay_s=0), False)
+    assert logic.evaluate(SolarReadings(1000, soc=70), 0) is None
+    assert logic.evaluate(SolarReadings(1000, soc=85), 1) == "start"
+    assert logic.evaluate(SolarReadings(1000, soc=60), 2) is None
+    assert logic.evaluate(SolarReadings(1000, soc=40), 3) == "stop"
+    logic = SolarLogic(_settings(max_import_w=200, start_delay_s=0, stop_delay_s=0), True)
+    assert logic.evaluate(SolarReadings(100, grid_import=500), 0) == "stop"
+
+
+def test_validation():
+    assert is_valid_passkey("")
+    assert is_valid_passkey("0123456789abcdef0123456789ABCDEF")
+    assert not is_valid_passkey("short!")
+    assert is_valid_user("some_user")
+    assert not is_valid_user("has space")
+
+
+def test_zip_bomb_refused():
+    import gzip
+
+    import pytest
+
+    from custom_components.foldingathome import fahcrypto as fc
+
+    key, iv = fc.random_bytes(32), fc.random_bytes(16)
+    bomb = gzip.compress(b"0" * (fc.MAX_DECOMPRESSED + 10))
+    payload = fc.urlb64encode(fc.aes_encrypt(key, iv, bomb))
+    with pytest.raises(fc.FahCryptoError):
+        fc.decrypt_message(key, fc.urlb64encode(iv), payload, "gzip")
+
+
+def test_node_host_validation():
+    from custom_components.foldingathome.account import valid_node_host
+
+    assert valid_node_host("node1.foldingathome.org")
+    assert valid_node_host("127.0.0.1:8080")
+    for bad in ("evil.com/x", "user:pw@evil.com", "evil.com?a=b", "localhost", "", None, "a.b:99999999"):
+        assert not valid_node_host(bad), bad

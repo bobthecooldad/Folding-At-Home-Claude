@@ -1,0 +1,101 @@
+fold:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true
+    group:
+      selector:
+        text:
+pause:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true
+    group:
+      selector:
+        text:
+finish:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true
+    group:
+      selector:
+        text:
+set_identity:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true
+    user:
+      selector:
+        text:
+    team:
+      selector:
+        number:
+          min: 0
+          max: 2147483647
+          mode: box
+    cause:
+      selector:
+        select:
+          translation_key: cause
+          options:
+            - any
+            - alzheimers
+            - cancer
+            - huntingtons
+            - parkinsons
+            - influenza
+            - diabetes
+            - covid-19
+set_group_config:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true
+    group:
+      default: ""
+      selector:
+        text:
+    cpus:
+      selector:
+        number:
+          min: 0
+          max: 256
+          mode: box
+    on_idle:
+      selector:
+        boolean:
+    on_battery:
+      selector:
+        boolean:
+    keep_awake:
+      selector:
+        boolean:
+    beta:
+      selector:
+        boolean:
+    cuda:
+      selector:
+        boolean:
+    hip:
+      selector:
+        boolean:
+refresh_account:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: foldingathome
+          multiple: true

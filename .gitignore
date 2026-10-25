@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# never commit credentials or scratch files
+*Passkey*.txt
+*passkey*.txt
+_to_delete/
+*.zip

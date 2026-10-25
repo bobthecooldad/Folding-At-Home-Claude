@@ -40,7 +40,7 @@ async def async_setup_entry(
 
     @callback
     def add_groups() -> None:
-        new = []
+        new: list[SwitchEntity] = []
         for mid, view in (coordinator.data or {}).items():
             if mid not in coordinator.contexts:
                 continue
@@ -49,6 +49,11 @@ async def async_setup_entry(
                     continue
                 known.add((mid, group))
                 new.extend(FahGroupSwitch(coordinator, mid, group, key) for key in GROUP_SWITCHES)
+            for slot in view.slots:
+                if slot.kind != "gpu" or not slot.gpu_id or (mid, slot.key) in known:
+                    continue
+                known.add((mid, slot.key))
+                new.append(FahGpuSwitch(coordinator, mid, slot.gpu_id, slot.key, slot.name))
         if new:
             async_add_entities(new)
 
@@ -136,3 +141,44 @@ class FahGroupSwitch(FahMachineEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable."""
         await self.coordinator.async_configure_group(self.machine_id, self._group, **{self._key: False})
+
+
+class FahGpuSwitch(FahMachineEntity, SwitchEntity):
+    """Fold on this GPU (the web app's GPU "Enabled" checkbox)."""
+
+    _attr_icon = "mdi:expansion-card"
+
+    def __init__(
+        self, coordinator: FahAccountCoordinator, machine_id: str, gpu_id: str, slot_key: str, name: str
+    ) -> None:
+        super().__init__(coordinator, machine_id, f"gpu_{gpu_id}_enabled")
+        self._gpu_id = gpu_id
+        self._slot_key = slot_key
+        self._attr_name = name
+
+    @property
+    def available(self) -> bool:
+        """Only while the GPU is detected."""
+        return super().available and self.view.slot(self._slot_key) is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        """Enabled in a resource group?"""
+        slot = self.view.slot(self._slot_key) if self.view else None
+        return None if slot is None else slot.enabled
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """GPU details."""
+        slot = self.view.slot(self._slot_key) if self.view else None
+        if slot is None:
+            return None
+        return {"gpu_id": self._gpu_id, "resource_group": slot.group, "supported": slot.supported}
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable the GPU."""
+        await self.coordinator.async_set_gpu_enabled(self.machine_id, self._gpu_id, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable the GPU."""
+        await self.coordinator.async_set_gpu_enabled(self.machine_id, self._gpu_id, False)

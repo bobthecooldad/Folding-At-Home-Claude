@@ -493,6 +493,13 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         except (FahConnectionError, ValueError) as err:
             raise HomeAssistantError(str(err)) from err
 
+    async def async_set_gpu_enabled(self, machine_id: str, gpu_id: str, enabled: bool) -> None:
+        """Turn a GPU on/off for folding."""
+        try:
+            await self._require(machine_id).configure_gpu(gpu_id, enabled)
+        except (FahConnectionError, ValueError) as err:
+            raise HomeAssistantError(str(err)) from err
+
     # -------------------------------------------------------------- projects
     @callback
     def _ingest_wus(self, machine_id: str, wus: list[Any], incremental: bool) -> None:

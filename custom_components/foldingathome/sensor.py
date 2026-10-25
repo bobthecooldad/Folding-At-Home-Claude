@@ -347,11 +347,11 @@ async def async_setup_entry(
         for mid, view in (coordinator.data or {}).items():
             if mid not in coordinator.contexts:
                 continue
-            for unit in view.units:
-                if (mid, unit.slot) in known_slots:
+            for slot in view.slots:
+                if (mid, slot.key) in known_slots:
                     continue
-                known_slots.add((mid, unit.slot))
-                new.extend(FahSlotSensor(coordinator, mid, d, unit.slot, unit.slot_name) for d in SLOT_SENSORS)
+                known_slots.add((mid, slot.key))
+                new.extend(FahSlotSensor(coordinator, mid, d, slot.key, slot.name) for d in SLOT_SENSORS)
         if new:
             async_add_entities(new)
 
@@ -425,9 +425,15 @@ class FahSlotSensor(FahMachineEntity, SensorEntity):
         """State."""
         unit = self._unit
         if unit is None:
-            if self.entity_description.key == "status":
-                return "Idle"
-            if self.entity_description.key in ("progress", "ppd"):
+            key = self.entity_description.key
+            if key == "status":
+                slot = self.view.slot(self._slot) if self.view else None
+                if slot is None:
+                    return "Idle"
+                if not slot.supported:
+                    return "Unsupported"
+                return "Idle" if slot.enabled else "Disabled"
+            if key in ("progress", "ppd"):
                 return 0
             return None
         return self.entity_description.value_fn(unit)
@@ -438,4 +444,8 @@ class FahSlotSensor(FahMachineEntity, SensorEntity):
         if self.entity_description.key != "progress":
             return None
         unit = self._unit
-        return unit.as_attributes() if unit else None
+        slot = self.view.slot(self._slot) if self.view else None
+        attrs: dict[str, Any] = unit.as_attributes() if unit else {}
+        if slot is not None:
+            attrs.update({"enabled": slot.enabled, "gpu_id": slot.gpu_id, "resource_group": slot.group})
+        return attrs or None

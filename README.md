@@ -1,8 +1,10 @@
+<p align="center"><img src="images/icon.png" alt="Icon" width="128"></p>
+
 # Folding@home for Home Assistant
 
 A custom integration that controls your **Folding@home v8 machines through your Folding@home account**, the same way <https://app.foldingathome.org> does. Home Assistant never talks to a machine's IP address, so changing IPs, other networks and firewalls don't matter. Every machine linked to your account shows up as its own device, and new machines appear by themselves.
 
-* **Control:** Fold / Pause / Finish per machine or for all machines, CPUs per resource group, and the idle/battery/keep-awake/beta switches.
+* **Control:** Fold / Pause / Finish per machine or for all machines, turn individual GPUs on/off, CPUs per resource group, and the idle/battery/keep-awake/beta switches.
 * **Account settings:** user name, team, cause and passkey for the whole account (the same as the web app's Account settings).
 * **Sensors:** status, PPD, running WUs and CPUs in use per machine. Each CPU and GPU slot gets progress, PPD, ETA, project and status. The account gets total PPD, machines online, donor score, WUs, rank and team score.
 * **Project tracking:** every finished WU is recorded per machine and project (count, credited, failed, base credit), with the project's cause, institution and manager. This survives the client's own 500-WU history limit. A `foldingathome_wu_completed` event fires for each WU.
@@ -30,7 +32,7 @@ The config entry keeps the unlocked account key and the API session, just like t
 * Folding@home client **v8.3+** on each machine (tested against the 8.5 protocol).
 * Each machine **linked to your F@h account**, i.e. it shows up when you log in at app.foldingathome.org. To link a new machine, open its local web control (or app.foldingathome.org on that machine) while logged in. It links automatically. You can also start the client with your account token (*Account settings → Token*).
 * An account **passphrase**. If you only ever signed in with Google or GitHub, set a passphrase in the web app first.
-* Home Assistant **2025.2** or newer, with internet access.
+* Home Assistant **2025.2** or newer, with internet access (2026.3+ to show the integration's icon).
 
 Nothing has to be changed on the machines: no `config.xml` edits, open ports or fixed IPs.
 
@@ -115,11 +117,11 @@ Without a battery, use PV power minus house load, or a forecast sensor minus loa
 | Type | Entities |
 |---|---|
 | Sensor | Status (incl. *offline*), Points per day, Running work units, CPUs in use, Current project, Projects worked, Work units completed, Base credit earned, Last work unit finished, Solar status, Client version |
-| Sensor (per CPU/GPU slot) | *slot* progress, PPD, ETA, project, status. The progress sensor carries the full WU details as attributes. |
+| Sensor (CPU + **every detected GPU**) | progress, PPD, ETA, project, status (*Running*, *Idle*, *Disabled*, …), shown even when no work unit is assigned. Identical cards are numbered (GPU 1, GPU 2 …). The progress sensor carries the full WU details as attributes. |
 | Binary sensor | Online, Computing |
 | Button | Fold, Pause, Finish |
 | Select | Mode (fold/pause/finish), Solar stop action |
-| Switch | Folding (on = fold, off = pause), Solar control, and per group: Only when idle, While on battery, Keep awake, Beta projects |
+| Switch | Folding (on = fold, off = pause), Solar control, **one switch per GPU** (fold on that GPU, like the web app's *Enabled* box), and per group: Only when idle, While on battery, Keep awake, Beta projects |
 | Number | CPUs (per group), solar thresholds/delays |
 
 A machine you unlink from the account is removed from HA at the next account refresh (every 15 min, or press *Refresh*).

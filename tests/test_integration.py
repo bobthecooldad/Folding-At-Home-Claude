@@ -329,3 +329,73 @@ async def test_diagnostics_have_no_secrets(hass: HomeAssistant, cloud: MockCloud
     for secret in (PASSKEY, PASSPHRASE, cloud.sid, entry.data["private_key"][:40], EMAIL.lower()):
         assert secret not in diag
     assert '"machine_count": 2' in diag
+
+
+def _multi_gpu(machine) -> None:
+    """Make a machine look like DESKTOP-FNUNSNS: 3 GPUs, one unit, one GPU disabled."""
+    st = machine.state
+    st["info"]["gpus"] = {
+        "gpu:01:00:00": {"description": "Quadro RTX 4000", "type": "NVIDIA", "supported": True},
+        "gpu:02:00:00": {"description": "Quadro P4000", "type": "NVIDIA", "supported": True},
+        "gpu:03:00:00": {"description": "Quadro P4000", "type": "NVIDIA", "supported": True},
+    }
+    st["groups"][""]["config"]["gpus"] = {
+        "gpu:01:00:00": {"enabled": True},
+        "gpu:02:00:00": {"enabled": False},
+        "gpu:03:00:00": {"enabled": True},
+    }
+    # the GPU unit on GPU 1; GPU 3 has no unit yet, GPU 2 is disabled
+    st["units"][1]["gpus"] = ["gpu:01:00:00"]
+
+
+async def test_all_gpus_shown_and_toggle(hass: HomeAssistant, cloud: MockCloud) -> None:
+    rig1, rig2 = list(cloud.machines.values())
+    _multi_gpu(rig1)
+    rig2.state["groups"][""]["config"]["cpus"] = 0  # like DESKTOP-FK6PH6R: CPU off
+    await _login(hass)
+    await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_status")).state == "folding")
+    await hass.async_block_till_done()
+
+    def st(uid):
+        return hass.states.get(_eid(hass, "sensor", uid))
+
+    # every GPU has sensors, identical cards are numbered
+    assert st(f"{rig1.id}_slot_|gpu:gpu:01:00:00_status").state == "Running"
+    assert st(f"{rig1.id}_slot_|gpu:gpu:02:00:00_status").state == "Disabled"
+    assert st(f"{rig1.id}_slot_|gpu:gpu:03:00:00_status").state == "Idle"
+    assert st(f"{rig1.id}_slot_|gpu:gpu:02:00:00_status").attributes["friendly_name"] == "rig-1 GPU 2 Quadro P4000 status"
+    assert st(f"{rig1.id}_slot_|gpu:gpu:03:00:00_status").attributes["friendly_name"] == "rig-1 GPU 3 Quadro P4000 status"
+    # CPU slot shows Disabled when the group has 0 CPUs, even with a unit present it is Running
+    assert st(f"{rig2.id}_slot_|cpu_status").state in ("Running", "Disabled")
+
+    # GPU switches mirror the web app's "Enabled" boxes
+    sw2 = _eid(hass, "switch", f"{rig1.id}_gpu_gpu:02:00:00_enabled")
+    sw1 = _eid(hass, "switch", f"{rig1.id}_gpu_gpu:01:00:00_enabled")
+    assert hass.states.get(sw2).state == "off"
+    assert hass.states.get(sw1).state == "on"
+    assert hass.states.get(sw2).attributes["friendly_name"] == "rig-1 GPU 2 Quadro P4000"
+
+    await hass.services.async_call("switch", "turn_on", {"entity_id": sw2}, blocking=True)
+    await _wait(lambda: rig1.state["groups"][""]["config"]["gpus"]["gpu:02:00:00"]["enabled"] is True)
+    # the whole map is sent, the other GPUs keep their setting
+    sent = rig1.received[-1]["config"]["groups"][""]["gpus"]
+    assert sent == {
+        "gpu:01:00:00": {"enabled": True},
+        "gpu:02:00:00": {"enabled": True},
+        "gpu:03:00:00": {"enabled": True},
+    }
+    await _wait(lambda: hass.states.get(sw2).state == "on")
+    await _wait(lambda: st(f"{rig1.id}_slot_|gpu:gpu:02:00:00_status").state == "Idle")
+
+    await hass.services.async_call("switch", "turn_off", {"entity_id": sw1}, blocking=True)
+    await _wait(lambda: rig1.state["groups"][""]["config"]["gpus"]["gpu:01:00:00"]["enabled"] is False)
+    assert rig1.state["groups"][""]["config"]["gpus"]["gpu:03:00:00"]["enabled"] is True
+    assert not rig1.rejected
+
+
+async def test_cpu_slot_disabled_when_no_cpus(hass: HomeAssistant, cloud: MockCloud) -> None:
+    rig1, rig2 = list(cloud.machines.values())
+    rig2.state["groups"][""]["config"]["cpus"] = 0
+    rig2.state["units"] = []
+    await _login(hass)
+    await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig2.id}_slot_|cpu_status")).state == "Disabled")

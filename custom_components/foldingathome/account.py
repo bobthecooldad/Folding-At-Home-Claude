@@ -370,6 +370,34 @@ class FahMachine:
         await self.send_command("config", config={"groups": groups})
 
 
+    async def configure_gpu(self, gpu_id: str, enabled: bool) -> None:
+        """Enable/disable one GPU (like the web app's GPU table).
+
+        A group's ``gpus`` setting is replaced as a whole, so the full map for
+        that group is sent. A GPU being enabled that is not in any group goes
+        to the default group "".
+        """
+        gpus_info = self.state.get("info", {}).get("gpus") or {}
+        if gpu_id not in gpus_info:
+            raise ValueError(f"Unknown GPU '{gpu_id}'")
+        groups_state = self.state.get("groups") or {}
+        owner = None
+        for name, group in groups_state.items():
+            if ((group.get("config") or {}).get("gpus") or {}).get(gpu_id, {}).get("enabled"):
+                owner = name
+                break
+        target = owner if owner is not None else ("" if "" in groups_state else next(iter(groups_state), ""))
+        current = ((groups_state.get(target) or {}).get("config") or {}).get("gpus") or {}
+        new_map = {gid: {"enabled": bool((current.get(gid) or {}).get("enabled"))} for gid in gpus_info}
+        for gid, conf in current.items():  # keep undetected-but-enabled GPUs, as the web app does
+            if gid not in new_map and (conf or {}).get("enabled"):
+                new_map[gid] = {"enabled": True}
+        new_map[gpu_id] = {"enabled": bool(enabled)}
+        groups: dict[str, Any] = {g: {} for g in self.groups}
+        groups[target] = {"gpus": new_map}
+        await self.send_command("config", config={"groups": groups})
+
+
 # --------------------------------------------------------------- the node
 class FahNode:
     """Account WebSocket to the F@h node, multiplexing all machines."""

@@ -132,22 +132,76 @@ def unit_state(state: dict[str, Any], unit: dict[str, Any], now: dt.datetime) ->
     return ustate
 
 
+def gpu_ids(state: dict[str, Any]) -> list[str]:
+    """Detected GPU ids, in a stable order."""
+    return sorted(str(g) for g in (state.get("info", {}).get("gpus") or {}))
+
+
 def gpu_name(state: dict[str, Any], gpu_id: str) -> str:
-    """Friendly GPU name."""
-    gpu = state.get("info", {}).get("gpus", {}).get(gpu_id, {})
-    desc = gpu.get("description") if isinstance(gpu, dict) else None
-    return desc or f"GPU {gpu_id}"
+    """Friendly, unique GPU name.
+
+    Several identical cards (e.g. two "Quadro P4000") are numbered so every
+    GPU gets its own clearly named entities.
+    """
+    gpus = state.get("info", {}).get("gpus", {}) or {}
+    gpu = gpus.get(gpu_id, {})
+    desc = (gpu.get("description") if isinstance(gpu, dict) else None) or "GPU"
+    ids = gpu_ids(state)
+    if len(ids) > 1 and gpu_id in ids:
+        return f"GPU {ids.index(gpu_id) + 1} {desc}"
+    return desc
+
+
+def gpu_slot_key(gpu_id: str) -> str:
+    """Slot key of a GPU (independent of the group it is assigned to)."""
+    return f"|gpu:{gpu_id}"
+
+
+def cpu_slot_key(group: str) -> str:
+    """Slot key of a group's CPU unit."""
+    return f"{group}|cpu"
+
+
+def cpu_slot_name(group: str) -> str:
+    """Name of a group's CPU slot."""
+    return f"{group} CPU" if group else "CPU"
+
+
+def gpu_group(state: dict[str, Any], gpu_id: str) -> str | None:
+    """Group the GPU is enabled in (None = not enabled anywhere)."""
+    for name, group in (state.get("groups") or {}).items():
+        conf = (group.get("config") or {}).get("gpus") or {}
+        if (conf.get(gpu_id) or {}).get("enabled"):
+            return name
+    return None
+
+
+def unit_gpus(unit: dict[str, Any]) -> list[str]:
+    """GPUs of a unit (``unit.gpus``, or the assignment's before it starts)."""
+    gpus = unit.get("gpus") or (unit.get("assignment") or {}).get("gpus") or []
+    return [str(g) for g in gpus]
 
 
 def unit_slot(state: dict[str, Any], unit: dict[str, Any]) -> tuple[str, str]:
     """Stable slot key + name for a unit (resource it runs on)."""
-    group = unit.get("group", "")
-    gpus = unit.get("gpus") or []
-    prefix = f"{group} " if group else ""
+    gpus = unit_gpus(unit)
     if gpus:
-        gid = str(gpus[0])
-        return f"{group}|gpu:{gid}", f"{prefix}{gpu_name(state, gid)}".strip()
-    return f"{group}|cpu", f"{prefix}CPU".strip()
+        return gpu_slot_key(gpus[0]), gpu_name(state, gpus[0])
+    group = unit.get("group", "")
+    return cpu_slot_key(group), cpu_slot_name(group)
+
+
+@dataclass
+class SlotView:
+    """A resource slot: the CPU of a group, or one GPU."""
+
+    key: str
+    name: str
+    kind: str  # "cpu" | "gpu"
+    gpu_id: str | None = None
+    group: str | None = None  # group the CPU/GPU belongs to
+    enabled: bool = True
+    supported: bool = True
 
 
 def build_unit(state: dict[str, Any], unit: dict[str, Any], now: dt.datetime) -> UnitView:
@@ -186,7 +240,7 @@ def build_unit(state: dict[str, Any], unit: dict[str, Any], now: dt.datetime) ->
         eta_seconds=parse_eta(eta),
         eta=eta if isinstance(eta, str) else None,
         cpus=int(unit.get("cpus", 0) or 0),
-        gpus=[str(g) for g in unit.get("gpus") or []],
+        gpus=unit_gpus(unit),
         core=core,
         base_credit=assignment.get("credit"),
         assign_time=assign_time,
@@ -209,6 +263,7 @@ class MachineView:
     cpus_available: int
     cpus_used: int
     gpus: dict[str, str]
+    slots: list[SlotView]
     ppd: int
     units: list[UnitView]
     groups: dict[str, dict[str, Any]]
@@ -229,6 +284,10 @@ class MachineView:
             if u.project is not None and u.project not in seen:
                 seen.append(u.project)
         return seen
+
+    def slot(self, key: str) -> SlotView | None:
+        """Slot by key."""
+        return next((s for s in self.slots if s.key == key), None)
 
     def unit_for_slot(self, slot: str) -> UnitView | None:
         """Best unit occupying a slot (the running one if several)."""
@@ -271,7 +330,32 @@ def build_machine(state: dict[str, Any], now: dt.datetime | None = None) -> Mach
     now = now or dt.datetime.now(dt.UTC)
     info = state.get("info", {})
     units = [build_unit(state, u, now) for u in state.get("units", []) if isinstance(u, dict)]
-    gpus = {str(gid): gpu_name(state, str(gid)) for gid in (info.get("gpus") or {})}
+    gpus = {gid: gpu_name(state, gid) for gid in gpu_ids(state)}
+    slots: list[SlotView] = []
+    for gname, gdata in (state.get("groups") or {}).items():
+        cpus = (gdata.get("config") or {}).get("cpus", 0)
+        slots.append(
+            SlotView(cpu_slot_key(gname), cpu_slot_name(gname), "cpu", group=gname, enabled=bool(cpus))
+        )
+    for gid in gpu_ids(state):
+        ginfo = (info.get("gpus") or {}).get(gid) or {}
+        owner = gpu_group(state, gid)
+        slots.append(
+            SlotView(
+                gpu_slot_key(gid),
+                gpus[gid],
+                "gpu",
+                gpu_id=gid,
+                group=owner,
+                enabled=owner is not None,
+                supported=bool(ginfo.get("supported", True)) if isinstance(ginfo, dict) else True,
+            )
+        )
+    known = {sl.key for sl in slots}
+    for u in units:  # e.g. a unit on a GPU that is no longer detected
+        if u.slot not in known:
+            known.add(u.slot)
+            slots.append(SlotView(u.slot, u.slot_name, "gpu" if u.gpus else "cpu", group=u.group))
     failed = None
     for g in state.get("groups", {}).values():
         if g.get("failed"):
@@ -285,6 +369,7 @@ def build_machine(state: dict[str, Any], now: dt.datetime | None = None) -> Mach
         cpus_available=int(info.get("cpus", 0) or 0),
         cpus_used=sum(u.cpus for u in units if u.state in ("RUN", "FINISH")),
         gpus=gpus,
+        slots=slots,
         ppd=sum(u.ppd for u in units if u.state in ("RUN", "FINISH")),
         units=units,
         groups=state.get("groups", {}),

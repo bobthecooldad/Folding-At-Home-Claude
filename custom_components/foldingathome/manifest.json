@@ -1,6 +1,10 @@
 {
   "domain": "foldingathome",
   "name": "Folding@home",
+  "categories": [
+    "computers_network.monitoring",
+    "energy.solar_batteries"
+  ],
   "codeowners": [
     "@bobthecooldad"
   ],
@@ -11,5 +15,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/bobthecooldad/Folding-At-Home-Claude/issues",
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

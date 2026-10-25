@@ -20,9 +20,9 @@ import asyncio
 import getpass
 import importlib
 import os
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
 
 try:
     import aiohttp

@@ -11,9 +11,9 @@ until the next solar transition.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from .const import (
@@ -214,11 +214,9 @@ def watt_value(state: Any) -> float | None:
     if value is None:
         return None
     unit = str(state.attributes.get("unit_of_measurement") or "").strip()
-    if unit.lower() == "kw":
-        return value * 1000
-    if unit.lower() == "mw":
-        return value * 1_000_000
-    return value
+    # Case matters: "mW" is milliwatt, "MW" megawatt
+    factor = {"mW": 0.001, "kW": 1000, "kw": 1000, "KW": 1000, "MW": 1_000_000, "GW": 1_000_000_000}.get(unit, 1)
+    return value * factor
 
 
 def monotonic() -> float:
@@ -234,3 +232,17 @@ def solar_status_disabled(enabled: bool, surplus_entity: str | None) -> str | No
         return SOLAR_NO_SENSOR
     return None
 
+
+
+def threshold_error(options: dict[str, Any]) -> tuple[str, str] | None:
+    """(field, error key) if the thresholds would make a machine flap.
+
+    Stop must be below start (power), and the battery stop level must not be
+    above the start level.
+    """
+    o = {**SOLAR_DEFAULTS, **options}
+    if float(o[CONF_SOLAR_STOP_W]) >= float(o[CONF_SOLAR_START_W]):
+        return CONF_SOLAR_STOP_W, "stop_above_start"
+    if o.get(CONF_SOLAR_SOC_ENTITY) and float(o[CONF_SOLAR_STOP_SOC]) > float(o[CONF_SOLAR_MIN_SOC]):
+        return CONF_SOLAR_STOP_SOC, "stop_soc_above_min"
+    return None

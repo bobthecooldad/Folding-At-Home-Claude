@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -64,6 +68,7 @@ from .const import (
     STOP_ACTIONS,
 )
 from .fahcrypto import FahCryptoError
+from .solar import threshold_error
 from .validation import is_valid_passkey, is_valid_user
 
 _LOGGER = logging.getLogger(__name__)
@@ -294,8 +299,8 @@ class FahOptionsFlow(OptionsFlow):
         if user_input is not None:
             if user_input.get(CONF_SOLAR_ENABLED) and not user_input.get(CONF_SOLAR_SURPLUS_ENTITY):
                 errors[CONF_SOLAR_SURPLUS_ENTITY] = "surplus_required"
-            elif float(user_input[CONF_SOLAR_STOP_W]) > float(user_input[CONF_SOLAR_START_W]):
-                errors[CONF_SOLAR_STOP_W] = "stop_above_start"
+            elif bad := threshold_error(user_input):
+                errors[bad[0]] = bad[1]
             else:
                 values = dict(user_input)
                 for key in (CONF_SOLAR_SURPLUS_ENTITY, CONF_SOLAR_SOC_ENTITY, CONF_SOLAR_IMPORT_ENTITY):

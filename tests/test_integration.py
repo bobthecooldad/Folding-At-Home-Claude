@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 
-
+import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.foldingathome.const import DOMAIN
 
@@ -321,7 +322,9 @@ async def test_wrong_account_machine_ignored(hass: HomeAssistant, cloud: MockClo
 
 
 async def test_diagnostics_have_no_secrets(hass: HomeAssistant, cloud: MockCloud) -> None:
-    from custom_components.foldingathome.diagnostics import async_get_config_entry_diagnostics
+    from custom_components.foldingathome.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
 
     entry = await _login(hass)
     await _wait(lambda: len(entry.runtime_data.data) == 2)
@@ -394,7 +397,7 @@ async def test_all_gpus_shown_and_toggle(hass: HomeAssistant, cloud: MockCloud) 
 
 
 async def test_cpu_slot_disabled_when_no_cpus(hass: HomeAssistant, cloud: MockCloud) -> None:
-    rig1, rig2 = list(cloud.machines.values())
+    _rig1, rig2 = list(cloud.machines.values())
     rig2.state["groups"][""]["config"]["cpus"] = 0
     rig2.state["units"] = []
     await _login(hass)
@@ -402,7 +405,7 @@ async def test_cpu_slot_disabled_when_no_cpus(hass: HomeAssistant, cloud: MockCl
 
 
 async def test_dashboard_websocket(hass: HomeAssistant, cloud: MockCloud, hass_ws_client) -> None:
-    rig1, rig2 = list(cloud.machines.values())
+    rig1, _rig2 = list(cloud.machines.values())
     _multi_gpu(rig1)
     await _login(hass)
     await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_status")).state == "folding")
@@ -438,11 +441,6 @@ async def test_dashboard_websocket(hass: HomeAssistant, cloud: MockCloud, hass_w
     assert set(projects[18251]["machines"]) == {"rig-1", "rig-2"}
     assert projects[18251]["wus"] == 2
     assert set(projects[18251]["current_on"]) == {"rig-1", "rig-2"}
-    import pathlib
-    out = pathlib.Path("/tmp/claude-0/card")
-    out.mkdir(parents=True, exist_ok=True)
-    states = {s.entity_id: {"state": s.state, "attributes": dict(s.attributes)} for s in hass.states.async_all() if s.entity_id.split(".")[1].startswith(("rig_", "folding_home"))}
-    (out / "fixture.json").write_text(json.dumps({"layout": msg["result"], "states": states}, default=str))
 
 
 async def test_solar_priority(hass: HomeAssistant, cloud: MockCloud) -> None:
@@ -479,6 +477,7 @@ async def test_solar_priority(hass: HomeAssistant, cloud: MockCloud) -> None:
 
 def test_priority_queue_logic():
     from custom_components.foldingathome.solar import SolarLogic, SolarReadings
+
     from .test_logic import _settings
 
     low = SolarLogic(_settings(start_delay_s=0, stop_delay_s=0), running=False)
@@ -492,7 +491,7 @@ def test_priority_queue_logic():
 
 async def test_research_topics(hass: HomeAssistant, cloud: MockCloud, hass_ws_client) -> None:
     """Work units per research topic: websocket, topic sensors, last-24h sensor."""
-    rig1, rig2 = list(cloud.machines.values())
+    rig1, _rig2 = list(cloud.machines.values())
     entry = await _login(hass)
     await _wait(lambda: hass.states.get(_eid(hass, "sensor", f"{rig1.id}_projects_worked")).state == "2")
     coord = entry.runtime_data
@@ -502,6 +501,7 @@ async def test_research_topics(hass: HomeAssistant, cloud: MockCloud, hass_ws_cl
     alz = _eid(hass, "sensor", f"{coord.account_id}_topic_alzheimers")
     assert alz and hass.states.get(alz).state == "2"  # one old WU on each machine
     assert hass.states.get(alz).attributes["unit_of_measurement"] == "WUs"
+    assert hass.states.get(alz).attributes["state_class"] == "total"  # may drop: not total_increasing
     assert hass.states.get(alz).name.endswith("Alzheimer's research work units")
     # the old history is outside the last 24 h; a WU finishing now is inside
     wus24 = _eid(hass, "sensor", f"{coord.account_id}_wus_24h")
@@ -532,3 +532,45 @@ async def test_research_topics(hass: HomeAssistant, cloud: MockCloud, hass_ws_cl
     msg = await client.receive_json()
     topics = {p["project"]: p["topic_label"] for p in msg["result"]["accounts"][0]["projects"]}
     assert topics[18251] == "Alzheimer's research"
+
+
+async def test_solar_numbers_refuse_flapping_thresholds(hass: HomeAssistant, cloud: MockCloud) -> None:
+    """Stop >= start (or battery stop above start) is refused from entities/the card."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    rig1, _rig2 = list(cloud.machines.values())
+    entry = await _login(hass)
+    await _wait(lambda: rig1.sessions)
+    await hass.async_block_till_done()
+    stop = _eid(hass, "number", f"{rig1.id}_solar_stop_w")
+    start = _eid(hass, "number", f"{rig1.id}_solar_start_w")
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call("number", "set_value", {"entity_id": stop, "value": 300}, blocking=True)
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call("number", "set_value", {"entity_id": start, "value": -200}, blocking=True)
+    await hass.services.async_call("number", "set_value", {"entity_id": stop, "value": 200}, blocking=True)
+    assert entry.runtime_data.machine_options(rig1.id)["solar_stop_w"] == 200
+    # battery levels only matter with a battery sensor
+    entry.runtime_data.async_update_machine_options(rig1.id, {"solar_soc_entity": "sensor.soc", "solar_min_soc": 90})
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": _eid(hass, "number", f"{rig1.id}_solar_stop_soc"), "value": 95},
+            blocking=True,
+        )
+
+
+async def test_unpublished_project_retried_daily(hass: HomeAssistant, cloud: MockCloud) -> None:
+    """A project the public API doesn't know is remembered, not re-fetched on every WU."""
+    rig1, _rig2 = list(cloud.machines.values())
+    entry = await _login(hass)
+    coord = entry.runtime_data
+    await _wait(lambda: "18251" in coord.project_info_all(), timeout=20)
+    cloud.missing_projects = {"55555"}
+    await rig1.complete_wu("rig1-x", 55555)
+    await _wait(lambda: (coord.project_info_all().get("55555") or {}).get("unpublished"), timeout=20)
+    asked = cloud.project_requests.count("55555")
+    assert asked == 1
+    await rig1.complete_wu("rig1-y", 55555)
+    await asyncio.sleep(1.5)
+    assert cloud.project_requests.count("55555") == asked  # not asked again today
+    assert coord._missing_project_info() == []

@@ -1,6 +1,6 @@
 # Security review
 
-Scope: `custom_components/foldingathome` v1.3.0 and `tools/fah_account_check.py`. Reviewed on 2026-10-25 by reading the code, running the bandit scanner, and running the test suite (36 tests, including hostile-input cases).
+Scope: `custom_components/foldingathome` v1.3.1 and `tools/fah_account_check.py`. Reviewed on 2026-10-25 by reading the code, running the bandit scanner, and running the test suite (41 tests, including hostile-input cases).
 
 ## Network exposure
 

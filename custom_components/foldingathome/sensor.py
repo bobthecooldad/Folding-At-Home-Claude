@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
-import datetime as dt
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -423,7 +423,10 @@ class FahTopicSensor(FahAccountEntity, SensorEntity):
 
     _attr_translation_key = "topic_wus"
     _attr_native_unit_of_measurement = "WUs"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # TOTAL, not TOTAL_INCREASING: a topic can lose WUs (a project's
+    # description arrives and it moves from "Other" to its real topic), and
+    # a drop must not be read as a meter reset in long-term statistics.
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_icon = "mdi:dna"
     _unrecorded_attributes = frozenset({"machines"})
 
@@ -481,6 +484,14 @@ class FahSlotSensor(FahMachineEntity, SensorEntity):
     """Per CPU / GPU slot sensor."""
 
     entity_description: FahSlotDescription
+    # The progress sensor's WU details change on every update: keep them out
+    # of the history database (the state itself is still recorded).
+    _unrecorded_attributes = frozenset(
+        {
+            "unit_id", "group", "slot", "status", "project", "prcg", "progress", "ppd", "eta",
+            "cpus", "gpus", "core", "base_credit", "assigned", "timeout", "deadline", "pause_reason",
+        }
+    )
 
     def __init__(
         self, coordinator: C, machine_id: str, description: FahSlotDescription, slot: str, slot_name: str

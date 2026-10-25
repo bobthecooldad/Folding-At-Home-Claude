@@ -5,9 +5,9 @@ Pure functions, no Home Assistant imports, so they are easy to test.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import datetime as dt
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from .const import (

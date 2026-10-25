@@ -27,7 +27,8 @@
       "invalid_passkey": "A passkey is exactly 32 hexadecimal characters (0-9, a-f).",
       "cannot_save": "Could not save the account settings (see the log).",
       "surplus_required": "Choose a surplus sensor to enable solar control.",
-      "stop_above_start": "The stop threshold must be lower than the start threshold."
+      "stop_above_start": "The stop threshold must be lower than the start threshold.",
+      "stop_soc_above_min": "The battery stop level can't be above the start level."
     },
     "abort": {
       "already_configured": "This account is already configured.",
@@ -102,7 +103,8 @@
       "invalid_passkey": "A passkey is exactly 32 hexadecimal characters (0-9, a-f).",
       "cannot_save": "Could not save the account settings (see the log).",
       "surplus_required": "Choose a surplus sensor to enable solar control.",
-      "stop_above_start": "The stop threshold must be lower than the start threshold."
+      "stop_above_start": "The stop threshold must be lower than the start threshold.",
+      "stop_soc_above_min": "The battery stop level can't be above the start level."
     },
     "abort": {
       "no_machines": "No machines are linked to this account yet."
@@ -376,8 +378,8 @@
       "description": "Set the account's user name, team and cause (applies to all linked machines). Set the passkey from the integration's Configure dialog.",
       "fields": {
         "device_id": {
-          "name": "Machines",
-          "description": "Leave empty for all."
+          "name": "Account",
+          "description": "Pick the account device (or any of its machines) to choose which account to change. Leave empty for all accounts."
         },
         "user": {
           "name": "User name",

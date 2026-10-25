@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import datetime as dt
 import html
 import re
+from collections import OrderedDict
 from typing import Any
 
 MAX_SEEN_IDS = 3000
@@ -34,6 +34,30 @@ def parse_time(value: Any) -> dt.datetime | None:
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=dt.UTC)
+
+
+def _iso(when: dt.datetime) -> str:
+    """UTC time as "YYYY-MM-DDTHH:MM:SS+00:00" (sortable as a string)."""
+    return when.astimezone(dt.UTC).isoformat(timespec="seconds")
+
+
+UNPUBLISHED_RETRY = dt.timedelta(days=1)
+
+
+def info_is_current(info: dict[str, Any] | None) -> bool:
+    """Project info we can use as is.
+
+    Projects the public API doesn't know (yet) are remembered as
+    "unpublished" and asked for again once a day.
+    """
+    if not info:
+        return False
+    if not info.get("unpublished"):
+        # 1.3.0 and older stored an empty entry when the API had no such
+        # project; treat those as missing so they are fetched again.
+        return any(info.get(k) for k in ("cause", "description", "manager", "institution"))
+    fetched = parse_time(info.get("fetched"))
+    return fetched is not None and dt.datetime.now(dt.UTC) - fetched < UNPUBLISHED_RETRY
 
 
 def cause_key(cause: Any) -> str:
@@ -154,26 +178,28 @@ class ProjectTracker:
         cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=RECENT_DAYS)
         if when < cutoff:
             return
-        self.recent[uid] = [when.isoformat(), project]
-        self.prune_recent()
+        self.recent[uid] = [_iso(when), project]
+        if len(self.recent) > MAX_RECENT + 500:
+            self.prune_recent()
 
     def prune_recent(self) -> None:
-        """Drop entries older than RECENT_DAYS, and cap the size."""
-        cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=RECENT_DAYS)
-        for uid in [u for u, (t, _p) in self.recent.items() if (parse_time(t) or cutoff) <= cutoff]:
+        """Drop entries older than RECENT_DAYS, and cap the size.
+
+        Times are stored as normalised UTC ISO strings, so they compare as
+        strings without parsing (cheap even with thousands of entries).
+        """
+        cutoff = _iso(dt.datetime.now(dt.UTC) - dt.timedelta(days=RECENT_DAYS))
+        old = [u for u, (t, _p) in self.recent.items() if str(t) < cutoff]
+        for uid in old:
             del self.recent[uid]
         if len(self.recent) > MAX_RECENT:
-            for uid in sorted(self.recent, key=lambda u: self.recent[u][0])[: len(self.recent) - MAX_RECENT]:
+            for uid in sorted(self.recent, key=lambda u: str(self.recent[u][0]))[: len(self.recent) - MAX_RECENT]:
                 del self.recent[uid]
 
-    def recent_since(self, since: dt.datetime) -> list[tuple[dt.datetime, int]]:
-        """(finish time, project) of WUs finished after ``since``."""
-        out = []
-        for t, project in self.recent.values():
-            when = parse_time(t)
-            if when is not None and when >= since:
-                out.append((when, project))
-        return out
+    def recent_since(self, since: dt.datetime) -> list[tuple[str, int]]:
+        """(finish time, project) of WUs finished at or after ``since``."""
+        start = _iso(since)
+        return [(t, p) for t, p in self.recent.values() if str(t) >= start]
 
     def set_project_info(self, project: int | str, info: dict[str, Any]) -> None:
         """Store description data from the public API."""
@@ -186,10 +212,22 @@ class ProjectTracker:
             "fetched": dt.datetime.now(dt.UTC).isoformat(),
         }
 
+    def set_project_unpublished(self, project: int | str) -> None:
+        """The public API has no such project (yet): retry in a day."""
+        self.project_info[str(project)] = {
+            "cause": None,
+            "manager": None,
+            "institution": None,
+            "description": None,
+            "url": None,
+            "unpublished": True,
+            "fetched": dt.datetime.now(dt.UTC).isoformat(),
+        }
+
     def missing_info(self, extra: list[int] | None = None) -> list[str]:
-        """Projects we have no description for yet."""
+        """Projects we have no (current) description for."""
         ids = set(self.projects) | {str(p) for p in extra or []}
-        return sorted(p for p in ids if p not in self.project_info)
+        return sorted(p for p in ids if not info_is_current(self.project_info.get(p)))
 
     # ------------------------------------------------------------- totals
     @property

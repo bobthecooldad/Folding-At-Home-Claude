@@ -12,6 +12,7 @@ from homeassistant.components.number import (
 )
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
@@ -28,6 +29,7 @@ from .const import (
 from .coordinator import FahAccountCoordinator, FahConfigEntry
 from .entity import FahAccountEntity, FahMachineEntity
 from .model import group_config
+from .solar import threshold_error
 
 PARALLEL_UPDATES = 1
 
@@ -235,5 +237,15 @@ class FahSolarNumber(FahMachineEntity, NumberEntity):
         return float(self.coordinator.machine_options(self.machine_id)[self.entity_description.key])
 
     async def async_set_native_value(self, value: float) -> None:
-        """Save."""
-        self.coordinator.async_update_machine_options(self.machine_id, {self.entity_description.key: value})
+        """Save (refusing thresholds that would make the machine flap)."""
+        key = self.entity_description.key
+        if key == CONF_SOLAR_PRIORITY:
+            value = int(value)
+        new = {**self.coordinator.machine_options(self.machine_id), key: value}
+        if bad := threshold_error(new):
+            raise ServiceValidationError(
+                "Solar stop surplus must be lower than the start surplus"
+                if bad[1] == "stop_above_start"
+                else "Solar stop battery level must not be above the start level"
+            )
+        self.coordinator.async_update_machine_options(self.machine_id, {key: value})

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 import datetime as dt
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -36,9 +36,9 @@ from .const import (
     ACCOUNT_REFRESH,
     CONF_ACCOUNT,
     CONF_EMAIL,
+    CONF_MACHINES,
     CONF_PRIVATE_KEY,
     CONF_SID,
-    CONF_MACHINES,
     CONF_SOLAR_ENABLED,
     CONF_SOLAR_IMPORT_ENTITY,
     CONF_SOLAR_SOC_ENTITY,
@@ -56,7 +56,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .model import MachineView, build_machine
-from .projects import TOPIC_OTHER, ProjectTracker, project_topic
+from .projects import TOPIC_OTHER, ProjectTracker, info_is_current, project_topic
 from .solar import (
     SolarLogic,
     SolarReadings,
@@ -319,6 +319,13 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         """Platforms add entities for new slots / groups after updates."""
         self._update_adders.append(adder)
 
+    @callback
+    def async_forget_machine(self, machine_id: str) -> None:
+        """Drop a machine (unlinked / device deleted), stopping its solar timers."""
+        ctx = self.contexts.pop(machine_id, None)
+        for unsub in ctx.solar_unsubs if ctx else []:
+            unsub()
+
     def machine(self, machine_id: str) -> FahMachine:
         """FahMachine for an id."""
         return self.contexts[machine_id].machine
@@ -475,7 +482,7 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
                 dev_reg.async_update_device(
                     device.id, remove_config_entry_id=self.config_entry.entry_id
                 )
-                self.contexts.pop(mid, None)
+                self.async_forget_machine(mid)
 
     async def async_set_identity(self, **values: Any) -> None:
         """Change user/team/passkey/cause for the whole account."""
@@ -572,6 +579,7 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         ctx = self._context(machine_id)
         recent_before = len(ctx.tracker.recent)
         new = [s for wu in wus if (s := ctx.tracker.ingest(wu))]
+        ctx.tracker.prune_recent()
         if not new:
             ctx.history_imported = True
             if len(ctx.tracker.recent) != recent_before:
@@ -612,9 +620,9 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
 
     def _missing_project_info(self) -> list[str]:
         missing: set[str] = set()
-        known: dict[str, Any] = {}
+        known: set[str] = set()
         for mid, ctx in self.contexts.items():
-            known.update(ctx.tracker.project_info)
+            known.update(k for k, v in ctx.tracker.project_info.items() if info_is_current(v))
             view = self.data.get(mid) if self.data else None
             missing.update(ctx.tracker.missing_info(view.projects if view else []))
         return sorted(p for p in missing if p not in known)
@@ -635,13 +643,18 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
                     continue  # project ids come from the machines: only digits go in a URL
                 try:
                     info = await self.api.get_json(f"/project/{project}")
-                except FahApiError:
-                    info = {}
+                except FahApiError as err:
+                    if "HTTP 404" in str(err):
+                        # Not published (yet): remember, ask again tomorrow
+                        for ctx in self.contexts.values():
+                            ctx.tracker.set_project_unpublished(project)
+                    await asyncio.sleep(0.5)
+                    continue
                 except FahConnectionError as err:
                     _LOGGER.debug("Project %s info failed: %s", project, err)
                     offline = True
                     break
-                if isinstance(info, dict) and not info.get("error"):
+                if isinstance(info, dict) and info and not info.get("error"):
                     for ctx in self.contexts.values():
                         ctx.tracker.set_project_info(project, info)
                     shared[project] = info
@@ -651,7 +664,11 @@ class FahAccountCoordinator(DataUpdateCoordinator[dict[str, MachineView]]):
         # Share info between machines (same project on several machines)
         for ctx in self.contexts.values():
             for key, info in shared.items():
-                if key not in ctx.tracker.project_info and isinstance(info, dict) and "fetched" in info:
+                if (
+                    isinstance(info, dict)
+                    and "fetched" in info
+                    and not info_is_current(ctx.tracker.project_info.get(key))
+                ):
                     ctx.tracker.project_info[key] = info
         self._save_later(10)
         self._schedule_publish()

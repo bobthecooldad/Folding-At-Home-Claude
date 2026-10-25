@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .account import FahConnectionError
 from .const import STATE_FINISH, STATE_FOLD, STATE_PAUSE
 from .coordinator import FahAccountCoordinator, FahConfigEntry
 from .entity import FahAccountEntity, FahMachineEntity
@@ -85,9 +87,12 @@ class FahAccountButton(FahAccountEntity, ButtonEntity):
         if self.entity_description.command:
             await self.coordinator.async_set_state_all(self.entity_description.command)
             return
+        error = None
         try:
             await self.coordinator.async_refresh_account()
-        except Exception:  # noqa: BLE001
-            pass
+        except FahConnectionError as err:
+            error = err
         await self.coordinator.async_refresh_stats()
         self.coordinator.async_update_listeners()
+        if error is not None:
+            raise HomeAssistantError(f"Could not refresh the Folding@home account: {error}") from error

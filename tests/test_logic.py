@@ -4,7 +4,11 @@
 from custom_components.foldingathome.account import apply_update, redact
 from custom_components.foldingathome.model import build_machine, parse_eta
 from custom_components.foldingathome.projects import ProjectTracker
-from custom_components.foldingathome.solar import SolarLogic, SolarReadings, SolarSettings
+from custom_components.foldingathome.solar import (
+    SolarLogic,
+    SolarReadings,
+    SolarSettings,
+)
 from custom_components.foldingathome.validation import is_valid_passkey, is_valid_user
 
 from .fah_mock import make_state, wu_record
@@ -202,3 +206,55 @@ def test_recent_log_and_backfill():
     t2 = ProjectTracker(old)
     assert t2.ingest(wu_record("new", 1, end=iso(now - dt.timedelta(hours=2)))) is None
     assert t2.wu_count == 3 and list(t2.recent) == ["new"]
+
+
+def test_watt_units_case_sensitive():
+    from types import SimpleNamespace
+
+    from custom_components.foldingathome.solar import watt_value
+
+    def st(value, unit):
+        return SimpleNamespace(state=str(value), attributes={"unit_of_measurement": unit})
+
+    assert watt_value(st(1.5, "kW")) == 1500
+    assert watt_value(st(800, "W")) == 800
+    assert watt_value(st(2500, "mW")) == 2.5  # milliwatt, not megawatt
+    assert watt_value(st(0.002, "MW")) == 2000
+    assert watt_value(st("unavailable", "W")) is None
+
+
+def test_threshold_error():
+    from custom_components.foldingathome.solar import threshold_error
+
+    assert threshold_error({"solar_start_w": 300, "solar_stop_w": -100}) is None
+    assert threshold_error({"solar_start_w": 300, "solar_stop_w": 300})[1] == "stop_above_start"
+    soc = {"solar_soc_entity": "sensor.soc", "solar_min_soc": 90, "solar_stop_soc": 95}
+    assert threshold_error(soc)[1] == "stop_soc_above_min"
+    assert threshold_error({**soc, "solar_soc_entity": ""}) is None  # no battery sensor: ignored
+    assert threshold_error({**soc, "solar_stop_soc": 90}) is None
+
+
+def test_unpublished_projects_and_recent_strings():
+    import datetime as dt
+
+    from custom_components.foldingathome.projects import info_is_current
+
+    t = ProjectTracker()
+    t.ingest(wu_record("a", 13017))
+    assert t.missing_info() == ["13017"]
+    t.set_project_unpublished(13017)
+    assert t.missing_info() == []  # remembered for a day
+    t.project_info["13017"]["fetched"] = (dt.datetime.now(dt.UTC) - dt.timedelta(days=2)).isoformat()
+    assert t.missing_info() == ["13017"]  # asked again after a day
+    assert info_is_current({"cause": "cancer"}) and not info_is_current(None)
+    # empty entries stored by 1.3.0 for unknown projects are fetched again
+    t.project_info["13017"] = {"cause": None, "description": None, "fetched": "2026-10-01T00:00:00+00:00"}
+    assert t.missing_info() == ["13017"]
+    # finish times are normalised strings; mixed input formats still compare right
+    now = dt.datetime.now(dt.UTC)
+    t2 = ProjectTracker()
+    t2.ingest(wu_record("z", 1, end=(now - dt.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
+    t2.ingest(wu_record("y", 1, end=(now - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")))
+    assert len(t2.recent_since(now - dt.timedelta(hours=1))) == 1
+    assert len(t2.recent_since(now - dt.timedelta(hours=4))) == 2
+    assert all(v[0].endswith("+00:00") for v in t2.recent.values())

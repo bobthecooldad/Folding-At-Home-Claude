@@ -7,7 +7,8 @@ import logging
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
@@ -84,5 +85,5 @@ async def async_remove_config_entry_device(
         linked = {m.get("id") for m in coordinator.account.get("machines") or []}
         if mid in linked:
             return False
-        coordinator.contexts.pop(mid, None)
+        coordinator.async_forget_machine(mid)
     return True

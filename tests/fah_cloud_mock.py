@@ -19,7 +19,8 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from custom_components.foldingathome import fahcrypto as fc
 
@@ -182,6 +183,8 @@ class MockCloud:
         self.secret = fc.wrap_secret(self.account_key, self._key, salt)
         self.sid = "SID-123"
         self.sid_valid = True
+        self.project_requests: list[str] = []
+        self.missing_projects: set[str] = set()
         self.machines: dict[str, MockMachine] = {}
         self.account_ws: list[web.WebSocketResponse] = []
         self.login_ok: list[dict[str, Any]] = []
@@ -283,6 +286,9 @@ class MockCloud:
     async def _project(self, request: web.Request) -> web.Response:
         causes = {"18251": "alzheimers", "12345": "cancer", "17000": "influenza"}
         p = request.match_info["project"]
+        self.project_requests.append(p)
+        if p in self.missing_projects:
+            return web.json_response({"error": "DB:1643: Project not found.", "code": 404}, status=404)
         return web.json_response(
             {"cause": causes.get(p, "unknown"), "manager": "Dr X", "institution": "Uni", "description": "<p>About</p>"}
         )

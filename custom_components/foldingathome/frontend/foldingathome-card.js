@@ -18,7 +18,7 @@
  * and GPUs appear by themselves. Live values come from normal HA states.
  */
 
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.3.1";
 
 const COLORS = {
   green: "var(--success-color, #43a047)",
@@ -109,10 +109,16 @@ function windowText(hours) {
 
 const VIEW_KEY = "foldingathome-card-view";
 function loadView() {
-  try { return window.localStorage.getItem(VIEW_KEY); } catch (e) { return null; }
+  try {
+    const view = window.localStorage.getItem(VIEW_KEY);
+    return view === "impact" || view === "details" ? view : null;
+  } catch (e) { return null; }
 }
 function saveView(view) {
-  try { window.localStorage.setItem(VIEW_KEY, view); } catch (e) { /* private mode */ }
+  try {
+    if (view) window.localStorage.setItem(VIEW_KEY, view);
+    else window.localStorage.removeItem(VIEW_KEY);
+  } catch (e) { /* private mode */ }
 }
 
 /* Topic rows: label + count, and one block per work unit. Filled blocks are
@@ -185,7 +191,11 @@ class FoldingAtHomeCard extends HTMLElement {
       title: "Folding@home", projects_height: 400, show_projects: true,
       projects_view: "impact", research_hours: 24, ...config,
     };
-    if (old && (old.projects_view !== this._config.projects_view)) this._view = null;
+    if (old && (old.projects_view !== this._config.projects_view)) {
+      // A new default in the card settings beats the remembered last choice
+      this._view = null;
+      saveView(null);
+    }
     if (old && Number(old.research_hours) !== Number(this._config.research_hours)) this._loadResearch();
     this._signature = "";
     if (this._hass) this._render();
@@ -249,8 +259,10 @@ class FoldingAtHomeCard extends HTMLElement {
       const hours = Number(this._config.research_hours) || 0;
       const result = await this._hass.callWS({ type: "foldingathome/research", hours });
       this._research = result.accounts || [];
+      this._researchError = null;
     } catch (err) {
-      this._research = null; // older integration: Impact view just shows a note
+      this._research = null;
+      this._researchError = (err && (err.message || err.code)) || String(err);
     }
     this._signature = "";
     this._render();
@@ -294,7 +306,7 @@ class FoldingAtHomeCard extends HTMLElement {
     });
     return JSON.stringify([this._error, this._layout ? this._layout.length : -1, [...this._expanded], parts,
       (this._layout || []).map((a) => a.projects.length), this._currentView, this._topicFilter,
-      JSON.stringify(this._research)]);
+      JSON.stringify(this._research), this._researchError]);
   }
 
   /* -------------------------------------------------------------- events */
@@ -386,7 +398,7 @@ class FoldingAtHomeCard extends HTMLElement {
     if (!st) return "";
     const a = st.attributes;
     return `<label class="num"><span>${esc(label)}</span>
-      <input type="number" data-action="number" data-entity="${esc(entityId)}" value="${esc(Number(st.state))}"
+      <input type="number" data-action="number" data-entity="${esc(entityId)}" value="${isFinite(Number(st.state)) && st.state !== "" ? esc(Number(st.state)) : ""}"
         min="${esc(a.min)}" max="${esc(a.max)}" step="${esc(a.step || 1)}" ${st.state === "unavailable" ? "disabled" : ""}>
       ${unit ? `<span class="unit">${esc(unit)}</span>` : ""}</label>`;
   }
@@ -543,7 +555,9 @@ class FoldingAtHomeCard extends HTMLElement {
         : "How you're helping";
       inner = research
         ? renderTopics(research, { action: "topic" }) + `<div class="muted small hint">Click a topic to see its projects.</div>`
-        : `<div class="muted small">Loading…</div>`;
+        : this._researchError
+          ? `<div class="muted small">Could not load the impact statistics: ${esc(this._researchError)}</div>`
+          : `<div class="muted small">Loading…</div>`;
     } else {
       let items = acc.projects || [];
       const filter = this._topicFilter;
@@ -768,8 +782,25 @@ class FahEditorBase extends HTMLElement {
     this._update();
   }
 
+  async _ensureForm() {
+    // HA loads ha-form lazily; borrowing a built-in card's editor loads it
+    if (customElements.get("ha-form") || this._loadingForm) return;
+    this._loadingForm = true;
+    try {
+      const helpers = await window.loadCardHelpers();
+      const card = await helpers.createCardElement({ type: "entities", entities: [] });
+      if (card && card.constructor.getConfigElement) await card.constructor.getConfigElement();
+    } catch (e) { /* fall through: ha-form may still appear */ }
+    await customElements.whenDefined("ha-form");
+    this._update();
+  }
+
   _update() {
     if (!this._hass || !this._config) return;
+    if (!customElements.get("ha-form")) {
+      this._ensureForm();
+      return;
+    }
     if (!this._form) {
       this._form = document.createElement("ha-form");
       this._form.computeLabel = (schema) => schema.label || schema.name;

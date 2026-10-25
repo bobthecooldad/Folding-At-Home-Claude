@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, GROUP_BOOL_KEYS
 from .projects import project_topic
@@ -81,8 +81,9 @@ def build_dashboard(hass: HomeAssistant) -> list[dict[str, Any]]:
         machines = []
         projects: dict[str, dict[str, Any]] = {}
         for mid, ctx in c.contexts.items():
-            name = c.machine_name(mid)
             device = dev_reg.async_get_device({(DOMAIN, mid)})
+            # The name shown in HA (renamed devices keep the user's name)
+            name = (device.name_by_user or device.name) if device else c.machine_name(mid)
             view = (c.data or {}).get(mid)
             cpus = []
             gpus = []
@@ -120,7 +121,7 @@ def build_dashboard(hass: HomeAssistant) -> list[dict[str, Any]]:
             machines.append(
                 {
                     "id": mid,
-                    "name": (device.name_by_user or device.name) if device else name,
+                    "name": name,
                     "device_id": device.id if device else None,
                     "online": ctx.machine.online,
                     "entities": _entities(reg, mid, MACHINE_KEYS),
@@ -198,17 +199,25 @@ def ws_dashboard(
     connection.send_result(msg["id"], {"accounts": build_dashboard(hass)})
 
 
+def _display_name(dev_reg: dr.DeviceRegistry, c: Any, mid: str) -> str:
+    device = dev_reg.async_get_device({(DOMAIN, mid)})
+    return (device.name_by_user or device.name) if device else c.machine_name(mid)
+
+
 def build_research(hass: HomeAssistant, hours: float) -> list[dict[str, Any]]:
     """Work units per research topic for every loaded account."""
     reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
     accounts = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.state is not ConfigEntryState.LOADED:
             continue
         c = entry.runtime_data
+        names = {c.machine_name(mid): _display_name(dev_reg, c, mid) for mid in c.contexts}
         topics = [
             {
                 **item,
+                "machines": sorted({names.get(n, n) for n in item["machines"]}),
                 "entity": reg.async_get_entity_id(
                     "sensor", DOMAIN, f"{c.account_id}_topic_{item['topic'].replace('-', '_')}"
                 ),

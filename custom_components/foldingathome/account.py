@@ -21,12 +21,12 @@ No Home Assistant imports, so it can be tested standalone.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from dataclasses import dataclass, field
 import datetime as dt
 import json
 import logging
 import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
